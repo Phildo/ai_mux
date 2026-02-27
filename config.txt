@@ -1,0 +1,11 @@
+﻿# ai_mux config
+AGENT_CMD=codex --yolo
+TENX_EXE=10x.exe
+FILEPILOT_EXE=C:\Users\phildo\AppData\Local\Voidstar\FilePilot\FPilot.exe
+[DIRS]
+E:\archive\projects\github\ai_mux
+E:\archive\projects\github\goodiff
+E:\archive\projects\github\cscript
+E:\archive\projects\github\nightondeck
+E:\archive\projects\github\gnomeredux
+E:\archive\projects\github\takemetoyourleader
