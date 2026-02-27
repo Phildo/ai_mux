@@ -42,6 +42,7 @@ repo2,D:\work\repo2
 - `Git`: opens `cmd` and runs `git add . && git commit -m "stuff"`.
 - `Diff`: opens the configured `DIFF_EXE` with that folder path as its argument.
 - `Exe`: runs `run.bat` in that folder (button is blank when no `run.bat` is present).
+- `Build`: runs `buildrelease.bat` in that folder (`Build` button text).
 - `Cmd`: opens plain `cmd` in that directory.
 - `Folder`: opens that directory using `FILEPILOT_EXE`.
 

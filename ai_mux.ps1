@@ -252,19 +252,34 @@ function Open-InDiff {
     }
 }
 
-function Get-RunBatPath {
-    param([string]$Directory)
+function Get-BatPath {
+    param(
+        [string]$Directory,
+        [string]$FileName
+    )
 
-    if ([string]::IsNullOrWhiteSpace($Directory)) {
+    if ([string]::IsNullOrWhiteSpace($Directory) -or [string]::IsNullOrWhiteSpace($FileName)) {
         return $null
     }
 
-    $runBat = Join-Path -Path $Directory.Trim() -ChildPath 'run.bat'
-    if (Test-Path -LiteralPath $runBat -PathType Leaf) {
-        return $runBat
+    $batPath = Join-Path -Path $Directory.Trim() -ChildPath $FileName.Trim()
+    if (Test-Path -LiteralPath $batPath -PathType Leaf) {
+        return $batPath
     }
 
     return $null
+}
+
+function Get-RunBatPath {
+    param([string]$Directory)
+
+    return Get-BatPath -Directory $Directory -FileName 'run.bat'
+}
+
+function Get-BuildReleaseBatPath {
+    param([string]$Directory)
+
+    return Get-BatPath -Directory $Directory -FileName 'buildrelease.bat'
 }
 
 function Start-RunBatInDirectory {
@@ -289,7 +304,29 @@ function Start-RunBatInDirectory {
     }
 }
 
-function Set-ExeButtonCellValue {
+function Start-BuildReleaseBatInDirectory {
+    param([string]$Directory)
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        return
+    }
+
+    $buildReleaseBatPath = Get-BuildReleaseBatPath -Directory $Directory
+    if ([string]::IsNullOrWhiteSpace($buildReleaseBatPath)) {
+        [System.Windows.Forms.MessageBox]::Show("buildrelease.bat not found in: $Directory", 'ai_mux', 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    try {
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"`"$buildReleaseBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to run '$buildReleaseBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+    }
+}
+
+function Set-ScriptButtonCellValues {
     param(
         [System.Windows.Forms.DataGridViewRow]$Row,
         [string]$Directory
@@ -300,6 +337,7 @@ function Set-ExeButtonCellValue {
     }
 
     $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Exe' } else { '' }
+    $Row.Cells['Release'].Value = 'Build'
 }
 
 function Get-UniqueDirectoryEntriesFromGrid {
@@ -510,17 +548,19 @@ $gridButtonColors = @{
     'Git' = '#1976D2'
     'Diff' = '#66BB6A'
     'Exe' = '#EF6C00'
+    'Release' = '#8B0000'
     'Cmd' = '#000000'
     'Folder' = '#F3E5AB'
     'X' = '#C62828'
 }
 
-foreach ($name in @('AI', '10x', 'Git', 'Diff', 'Exe', 'Cmd', 'Folder', 'X')) {
+foreach ($name in @('AI', '10x', 'Git', 'Diff', 'Exe', 'Release', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'x' } else { $name }
     $col.Name = $name
-    $col.HeaderText = if ($name -eq 'X') { 'x' } else { $name }
-    $col.Text = if ($name -eq 'X') { 'x' } else { $name }
-    $col.UseColumnTextForButtonValue = ($name -ne 'Exe')
+    $col.HeaderText = $displayName
+    $col.Text = $displayName
+    $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Release')
     if ($name -eq 'X') {
         $col.Width = 40
     }
@@ -567,7 +607,7 @@ function Refresh-Grid {
         }
 
         $rowIndex = $Grid.Rows.Add($normalized.Name, $normalized.Path)
-        Set-ExeButtonCellValue -Row $Grid.Rows[$rowIndex] -Directory $normalized.Path
+        Set-ScriptButtonCellValues -Row $Grid.Rows[$rowIndex] -Directory $normalized.Path
     }
 }
 
@@ -618,7 +658,7 @@ $btnAddDir.Add_Click({
         $selectedPath = $dialog.SelectedPath
         $name = Get-DirectoryNameFromPath -Path $selectedPath
         $rowIndex = $grid.Rows.Add($name, $selectedPath)
-        Set-ExeButtonCellValue -Row $grid.Rows[$rowIndex] -Directory $selectedPath
+        Set-ScriptButtonCellValues -Row $grid.Rows[$rowIndex] -Directory $selectedPath
     }
 })
 
@@ -672,6 +712,9 @@ $grid.Add_CellContentClick({
         }
         'Exe' {
             Start-RunBatInDirectory -Directory $directory
+        }
+        'Release' {
+            Start-BuildReleaseBatInDirectory -Directory $directory
         }
         'Folder' {
             Open-FolderInFilePilot -Directory $directory -FilePilotExe $txtFilePilot.Text
