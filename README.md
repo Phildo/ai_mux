@@ -41,6 +41,7 @@ repo2,D:\work\repo2
 - `10x`: finds first `*.10x` recursively and opens it in 10x; if none, opens the directory in 10x.
 - `Git`: opens `cmd` and runs `git add . && git commit -m "stuff"`.
 - `Diff`: opens the configured `DIFF_EXE` with that folder path as its argument.
+- `Exe`: runs `run.bat` in that folder (button is blank when no `run.bat` is present).
 - `Cmd`: opens plain `cmd` in that directory.
 - `Folder`: opens that directory using `FILEPILOT_EXE`.
 

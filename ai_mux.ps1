@@ -252,6 +252,56 @@ function Open-InDiff {
     }
 }
 
+function Get-RunBatPath {
+    param([string]$Directory)
+
+    if ([string]::IsNullOrWhiteSpace($Directory)) {
+        return $null
+    }
+
+    $runBat = Join-Path -Path $Directory.Trim() -ChildPath 'run.bat'
+    if (Test-Path -LiteralPath $runBat -PathType Leaf) {
+        return $runBat
+    }
+
+    return $null
+}
+
+function Start-RunBatInDirectory {
+    param([string]$Directory)
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        return
+    }
+
+    $runBatPath = Get-RunBatPath -Directory $Directory
+    if ([string]::IsNullOrWhiteSpace($runBatPath)) {
+        [System.Windows.Forms.MessageBox]::Show("run.bat not found in: $Directory", 'ai_mux', 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    try {
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"`"$runBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to run '$runBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+    }
+}
+
+function Set-ExeButtonCellValue {
+    param(
+        [System.Windows.Forms.DataGridViewRow]$Row,
+        [string]$Directory
+    )
+
+    if ($null -eq $Row -or [string]::IsNullOrWhiteSpace($Directory)) {
+        return
+    }
+
+    $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Exe' } else { '' }
+}
+
 function Get-UniqueDirectoryEntriesFromGrid {
     param([System.Windows.Forms.DataGridView]$Grid)
 
@@ -312,8 +362,8 @@ function Resize-TopPanelToContent {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ai_mux'
-$form.Width = 1100
-$form.Height = 640
+$form.Width = 550
+$form.Height = 420
 $form.StartPosition = 'CenterScreen'
 
 $split = New-Object System.Windows.Forms.SplitContainer
@@ -337,7 +387,7 @@ $lblAgent.Location = New-Object System.Drawing.Point(10, 12)
 $topPanel.Controls.Add($lblAgent)
 
 $txtAgent = New-Object System.Windows.Forms.TextBox
-$txtAgent.Width = 460
+$txtAgent.Width = 46
 $txtAgent.Location = New-Object System.Drawing.Point(90, 8)
 $topPanel.Controls.Add($txtAgent)
 
@@ -348,14 +398,14 @@ $lblTenx.Location = New-Object System.Drawing.Point(10, 44)
 $topPanel.Controls.Add($lblTenx)
 
 $txtTenx = New-Object System.Windows.Forms.TextBox
-$txtTenx.Width = 460
+$txtTenx.Width = 46
 $txtTenx.Location = New-Object System.Drawing.Point(90, 40)
 $topPanel.Controls.Add($txtTenx)
 
 $btnBrowseTenx = New-Object System.Windows.Forms.Button
 $btnBrowseTenx.Text = 'Browse...'
 $btnBrowseTenx.Width = 90
-$btnBrowseTenx.Location = New-Object System.Drawing.Point(560, 38)
+$btnBrowseTenx.Location = New-Object System.Drawing.Point(142, 38)
 $topPanel.Controls.Add($btnBrowseTenx)
 
 $lblFilePilot = New-Object System.Windows.Forms.Label
@@ -365,14 +415,14 @@ $lblFilePilot.Location = New-Object System.Drawing.Point(10, 76)
 $topPanel.Controls.Add($lblFilePilot)
 
 $txtFilePilot = New-Object System.Windows.Forms.TextBox
-$txtFilePilot.Width = 460
+$txtFilePilot.Width = 46
 $txtFilePilot.Location = New-Object System.Drawing.Point(90, 72)
 $topPanel.Controls.Add($txtFilePilot)
 
 $btnBrowseFilePilot = New-Object System.Windows.Forms.Button
 $btnBrowseFilePilot.Text = 'Browse...'
 $btnBrowseFilePilot.Width = 90
-$btnBrowseFilePilot.Location = New-Object System.Drawing.Point(560, 70)
+$btnBrowseFilePilot.Location = New-Object System.Drawing.Point(142, 70)
 $topPanel.Controls.Add($btnBrowseFilePilot)
 
 $lblDiff = New-Object System.Windows.Forms.Label
@@ -382,32 +432,32 @@ $lblDiff.Location = New-Object System.Drawing.Point(10, 108)
 $topPanel.Controls.Add($lblDiff)
 
 $txtDiff = New-Object System.Windows.Forms.TextBox
-$txtDiff.Width = 460
+$txtDiff.Width = 46
 $txtDiff.Location = New-Object System.Drawing.Point(90, 104)
 $topPanel.Controls.Add($txtDiff)
 
 $btnBrowseDiff = New-Object System.Windows.Forms.Button
 $btnBrowseDiff.Text = 'Browse...'
 $btnBrowseDiff.Width = 90
-$btnBrowseDiff.Location = New-Object System.Drawing.Point(560, 102)
+$btnBrowseDiff.Location = New-Object System.Drawing.Point(142, 102)
 $topPanel.Controls.Add($btnBrowseDiff)
 
 $btnAddDir = New-Object System.Windows.Forms.Button
 $btnAddDir.Text = 'Add Folder'
 $btnAddDir.Width = 95
-$btnAddDir.Location = New-Object System.Drawing.Point(670, 8)
+$btnAddDir.Location = New-Object System.Drawing.Point(142, 8)
 $topPanel.Controls.Add($btnAddDir)
 
 $btnReload = New-Object System.Windows.Forms.Button
 $btnReload.Text = 'Reload'
 $btnReload.Width = 95
-$btnReload.Location = New-Object System.Drawing.Point(770, 8)
+$btnReload.Location = New-Object System.Drawing.Point(245, 8)
 $topPanel.Controls.Add($btnReload)
 
 $btnSave = New-Object System.Windows.Forms.Button
 $btnSave.Text = 'Save Config'
 $btnSave.Width = 95
-$btnSave.Location = New-Object System.Drawing.Point(870, 8)
+$btnSave.Location = New-Object System.Drawing.Point(348, 8)
 $topPanel.Controls.Add($btnSave)
 
 $hint = New-Object System.Windows.Forms.Label
@@ -459,25 +509,26 @@ $gridButtonColors = @{
     '10x' = '#2E7D32'
     'Git' = '#1976D2'
     'Diff' = '#66BB6A'
+    'Exe' = '#EF6C00'
     'Cmd' = '#000000'
     'Folder' = '#F3E5AB'
     'X' = '#C62828'
 }
 
-foreach ($name in @('AI', '10x', 'Git', 'Diff', 'Cmd', 'Folder', 'X')) {
+foreach ($name in @('AI', '10x', 'Git', 'Diff', 'Exe', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
     $col.Name = $name
     $col.HeaderText = if ($name -eq 'X') { 'x' } else { $name }
     $col.Text = if ($name -eq 'X') { 'x' } else { $name }
-    $col.UseColumnTextForButtonValue = $true
+    $col.UseColumnTextForButtonValue = ($name -ne 'Exe')
     if ($name -eq 'X') {
-        $col.Width = 80
+        $col.Width = 40
     }
     elseif ($name -eq 'Folder') {
-        $col.Width = 80
+        $col.Width = 40
     }
     else {
-        $col.Width = 70
+        $col.Width = 35
     }
 
     $colorHex = $gridButtonColors[$name]
@@ -515,7 +566,8 @@ function Refresh-Grid {
             continue
         }
 
-        [void]$Grid.Rows.Add($normalized.Name, $normalized.Path)
+        $rowIndex = $Grid.Rows.Add($normalized.Name, $normalized.Path)
+        Set-ExeButtonCellValue -Row $Grid.Rows[$rowIndex] -Directory $normalized.Path
     }
 }
 
@@ -565,7 +617,8 @@ $btnAddDir.Add_Click({
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $selectedPath = $dialog.SelectedPath
         $name = Get-DirectoryNameFromPath -Path $selectedPath
-        [void]$grid.Rows.Add($name, $selectedPath)
+        $rowIndex = $grid.Rows.Add($name, $selectedPath)
+        Set-ExeButtonCellValue -Row $grid.Rows[$rowIndex] -Directory $selectedPath
     }
 })
 
@@ -616,6 +669,9 @@ $grid.Add_CellContentClick({
         }
         'Cmd' {
             Start-CmdInDirectory -Directory $directory -Command ''
+        }
+        'Exe' {
+            Start-RunBatInDirectory -Directory $directory
         }
         'Folder' {
             Open-FolderInFilePilot -Directory $directory -FilePilotExe $txtFilePilot.Text
