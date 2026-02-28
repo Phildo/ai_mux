@@ -272,6 +272,71 @@ function Start-GitCommitInDirectory {
     }
 }
 
+function Test-GitWorkingTreeClean {
+    param([string]$Directory)
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        return $null
+    }
+
+    try {
+        $statusOutput = & git -C $Directory status --porcelain 2>&1
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            $details = ($statusOutput | Out-String).Trim()
+            if ([string]::IsNullOrWhiteSpace($details)) {
+                $details = 'Unknown git error.'
+            }
+
+            throw "git status failed in '$Directory' with exit code $exitCode.`r`n$details"
+        }
+
+        $joinedOutput = if ($statusOutput -is [System.Array]) {
+            ($statusOutput -join [Environment]::NewLine)
+        }
+        else {
+            [string]$statusOutput
+        }
+
+        return [string]::IsNullOrWhiteSpace($joinedOutput)
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to run git status in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        return $null
+    }
+}
+
+function Set-DirtyCellState {
+    param(
+        [System.Windows.Forms.DataGridViewRow]$Row,
+        [ValidateSet('Unknown', 'Clean', 'Dirty')]
+        [string]$State = 'Unknown'
+    )
+
+    if ($null -eq $Row -or $null -eq $Row.DataGridView -or -not $Row.DataGridView.Columns.Contains('Dirty')) {
+        return
+    }
+
+    $cell = $Row.Cells['Dirty']
+    if ($null -eq $cell) {
+        return
+    }
+
+    $colorHex = switch ($State) {
+        'Clean' { '#2E7D32' }
+        'Dirty' { '#C62828' }
+        default { '#9E9E9E' }
+    }
+
+    $backColor = [System.Drawing.ColorTranslator]::FromHtml($colorHex)
+    $cell.Value = '?'
+    $cell.Style.BackColor = $backColor
+    $cell.Style.ForeColor = [System.Drawing.Color]::White
+    $cell.Style.SelectionBackColor = $backColor
+    $cell.Style.SelectionForeColor = [System.Drawing.Color]::White
+}
+
 function Open-In10x {
     param(
         [string]$Directory,
@@ -438,6 +503,7 @@ function Set-ScriptButtonCellValues {
 
     $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Exe' } else { '' }
     $Row.Cells['Release'].Value = 'Build'
+    Set-DirtyCellState -Row $Row -State 'Unknown'
 }
 
 function Get-UniqueDirectoryEntriesFromGrid {
@@ -688,6 +754,7 @@ $gridButtonColors = @{
     'AI' = '#7B1FA2'
     '10x' = '#2E7D32'
     'Diff' = '#66BB6A'
+    'Dirty' = '#9E9E9E'
     'Exe' = '#EF6C00'
     'Release' = '#8B0000'
     'Cmd' = '#000000'
@@ -695,11 +762,11 @@ $gridButtonColors = @{
     'X' = '#C62828'
 }
 
-foreach ($name in @('AI', '10x', 'Diff', 'Exe', 'Release', 'Cmd', 'Folder', 'X')) {
+foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Exe', 'Release', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
-    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'x' } else { $name }
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'x' } elseif ($name -eq 'Dirty') { '?' } else { $name }
     $col.Name = $name
-    $col.HeaderText = if ($name -eq 'X') { '' } else { $displayName }
+    $col.HeaderText = if ($name -eq 'X') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
     $col.Text = $displayName
     $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Release')
     if ($name -eq 'X') {
@@ -707,6 +774,9 @@ foreach ($name in @('AI', '10x', 'Diff', 'Exe', 'Release', 'Cmd', 'Folder', 'X')
     }
     elseif ($name -eq 'Folder') {
         $col.Width = 40
+    }
+    elseif ($name -eq 'Dirty') {
+        $col.Width = 30
     }
     else {
         $col.Width = 35
@@ -730,12 +800,13 @@ $grid.Columns['X'].DisplayIndex = 0
 $grid.Columns['Name'].DisplayIndex = 1
 $grid.Columns['AI'].DisplayIndex = 2
 $grid.Columns['10x'].DisplayIndex = 3
-$grid.Columns['Message'].DisplayIndex = 4
-$grid.Columns['Diff'].DisplayIndex = 5
-$grid.Columns['Release'].DisplayIndex = 6
-$grid.Columns['Exe'].DisplayIndex = 7
-$grid.Columns['Cmd'].DisplayIndex = 8
-$grid.Columns['Folder'].DisplayIndex = 9
+$grid.Columns['Diff'].DisplayIndex = 4
+$grid.Columns['Dirty'].DisplayIndex = 5
+$grid.Columns['Message'].DisplayIndex = 6
+$grid.Columns['Release'].DisplayIndex = 7
+$grid.Columns['Exe'].DisplayIndex = 8
+$grid.Columns['Cmd'].DisplayIndex = 9
+$grid.Columns['Folder'].DisplayIndex = 10
 
 function Invoke-GitCommitFromRow {
     param(
@@ -755,6 +826,7 @@ function Invoke-GitCommitFromRow {
     $message = [string]$Grid.Rows[$RowIndex].Cells['Message'].Value
     if (Start-GitCommitInDirectory -Directory $directory.Trim() -Message $message) {
         $Grid.Rows[$RowIndex].Cells['Message'].Value = ''
+        Set-DirtyCellState -Row $Grid.Rows[$RowIndex] -State 'Clean'
 
         if ($Grid.Columns.Contains('Name')) {
             $Grid.ClearSelection()
@@ -882,6 +954,15 @@ $grid.Add_CellContentClick({
         }
         'Diff' {
             Open-InDiff -Directory $directory -DiffExe $txtDiff.Text
+        }
+        'Dirty' {
+            $isClean = Test-GitWorkingTreeClean -Directory $directory
+            if ($isClean -eq $true) {
+                Set-DirtyCellState -Row $grid.Rows[$e.RowIndex] -State 'Clean'
+            }
+            else {
+                Set-DirtyCellState -Row $grid.Rows[$e.RowIndex] -State 'Dirty'
+            }
         }
         'Cmd' {
             Start-CmdInDirectory -Directory $directory -Command ''
