@@ -968,6 +968,7 @@ $grid.MultiSelect = $false
 $grid.AutoSizeRowsMode = 'None'
 $grid.ReadOnly = $false
 $grid.EditMode = [System.Windows.Forms.DataGridViewEditMode]::EditOnEnter
+$grid.EnableHeadersVisualStyles = $false
 $split.Panel1.Controls.Add($topPanel)
 $split.Panel2.Controls.Add($grid)
 Resize-TopPanelToContent -Panel $topPanel -Split $split
@@ -1073,6 +1074,12 @@ $grid.Columns['Release'].DisplayIndex = 7
 $grid.Columns['Exe'].DisplayIndex = 8
 $grid.Columns['Cmd'].DisplayIndex = 9
 $grid.Columns['Folder'].DisplayIndex = 10
+$dirtyHeaderColor = [System.Drawing.ColorTranslator]::FromHtml('#9E9E9E')
+$grid.Columns['Dirty'].HeaderCell.Style.BackColor = $dirtyHeaderColor
+$grid.Columns['Dirty'].HeaderCell.Style.ForeColor = [System.Drawing.Color]::White
+$grid.Columns['Dirty'].HeaderCell.Style.SelectionBackColor = $dirtyHeaderColor
+$grid.Columns['Dirty'].HeaderCell.Style.SelectionForeColor = [System.Drawing.Color]::White
+$grid.Columns['Dirty'].HeaderCell.ToolTipText = 'Refresh Dirty for all rows'
 
 function Invoke-GitCommitFromRow {
     param(
@@ -1189,6 +1196,20 @@ $btnSave.Add_Click({
     Save-Config -Path $ConfigPath -AgentCmd $txtAgent.Text.Trim() -TenxExe $txtTenx.Text.Trim() -FilePilotExe $txtFilePilot.Text.Trim() -DiffExe $txtDiff.Text.Trim() -Directories $directories
     Refresh-Grid -Grid $grid -Directories $directories
     [System.Windows.Forms.MessageBox]::Show("Saved: $ConfigPath", 'ai_mux') | Out-Null
+})
+
+$grid.Add_ColumnHeaderMouseClick({
+    param($sender, $e)
+
+    if ($e.ColumnIndex -lt 0) {
+        return
+    }
+
+    if ($grid.Columns[$e.ColumnIndex].Name -ne 'Dirty') {
+        return
+    }
+
+    Start-DirtyStatusRefreshForGrid -Grid $grid
 })
 
 $grid.Add_CellContentClick({
