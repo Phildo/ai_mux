@@ -67,6 +67,77 @@ namespace AiMuxControls
 "@ -ReferencedAssemblies @('System.Windows.Forms.dll', 'System.Drawing.dll')
 }
 
+if (-not ('AiMuxControls.GitStatusChecker' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading.Tasks;
+
+namespace AiMuxControls
+{
+    public sealed class GitStatusResult
+    {
+        public string Directory { get; set; }
+        public bool? IsClean { get; set; }
+    }
+
+    public static class GitStatusChecker
+    {
+        public static Task<GitStatusResult> CheckAsync(string directory)
+        {
+            return Task.Run(() =>
+            {
+                var result = new GitStatusResult
+                {
+                    Directory = directory,
+                    IsClean = null
+                };
+
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                {
+                    return result;
+                }
+
+                try
+                {
+                    var args = "-C \"" + directory + "\" status --porcelain";
+                    var psi = new ProcessStartInfo("git", args)
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        CreateNoWindow = true
+                    };
+
+                    using (var process = Process.Start(psi))
+                    {
+                        if (process == null)
+                        {
+                            return result;
+                        }
+
+                        var stdout = process.StandardOutput.ReadToEnd();
+                        process.WaitForExit();
+                        result.IsClean = (process.ExitCode == 0) ? string.IsNullOrWhiteSpace(stdout) : (bool?)null;
+                    }
+                }
+                catch
+                {
+                    result.IsClean = null;
+                }
+
+                return result;
+            });
+        }
+    }
+}
+"@
+}
+
+$script:DirtyStatusPollTimer = $null
+$script:DirtyStatusProcessInfos = @()
+$script:DirtyStatusGrid = $null
+
 function Get-DirectoryNameFromPath {
     param([string]$Path)
 
@@ -273,10 +344,15 @@ function Start-GitCommitInDirectory {
 }
 
 function Test-GitWorkingTreeClean {
-    param([string]$Directory)
+    param(
+        [string]$Directory,
+        [switch]$Silent
+    )
 
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
-        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        if (-not $Silent) {
+            [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        }
         return $null
     }
 
@@ -302,7 +378,9 @@ function Test-GitWorkingTreeClean {
         return [string]::IsNullOrWhiteSpace($joinedOutput)
     }
     catch {
-        [System.Windows.Forms.MessageBox]::Show("Failed to run git status in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        if (-not $Silent) {
+            [System.Windows.Forms.MessageBox]::Show("Failed to run git status in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        }
         return $null
     }
 }
@@ -335,6 +413,193 @@ function Set-DirtyCellState {
     $cell.Style.ForeColor = [System.Drawing.Color]::White
     $cell.Style.SelectionBackColor = $backColor
     $cell.Style.SelectionForeColor = [System.Drawing.Color]::White
+}
+
+function Update-DirtyCellsByDirectory {
+    param(
+        [System.Windows.Forms.DataGridView]$Grid,
+        [string]$Directory,
+        [ValidateSet('Unknown', 'Clean', 'Dirty')]
+        [string]$State
+    )
+
+    if ($null -eq $Grid -or $Grid.IsDisposed -or [string]::IsNullOrWhiteSpace($Directory)) {
+        return
+    }
+
+    $targetDirectory = $Directory.Trim()
+    foreach ($row in $Grid.Rows) {
+        if ($row.IsNewRow) {
+            continue
+        }
+
+        $rowDirectory = [string]$row.Cells['Directory'].Value
+        if ([string]::IsNullOrWhiteSpace($rowDirectory)) {
+            continue
+        }
+
+        if ([string]::Equals($rowDirectory.Trim(), $targetDirectory, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Set-DirtyCellState -Row $row -State $State
+        }
+    }
+}
+
+function Start-DirtyStatusProcess {
+    param([string]$Directory)
+
+    if ([string]::IsNullOrWhiteSpace($Directory)) {
+        return $null
+    }
+
+    $targetDirectory = $Directory.Trim()
+    if (-not (Test-Path -LiteralPath $targetDirectory -PathType Container)) {
+        return $null
+    }
+
+    try {
+        $escapedDirectory = $targetDirectory.Replace('"', '""')
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = 'cmd.exe'
+        $processInfo.Arguments = "/d /c git -C `"$escapedDirectory`" status --porcelain"
+        $processInfo.UseShellExecute = $false
+        $processInfo.RedirectStandardOutput = $true
+        $processInfo.CreateNoWindow = $true
+
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $processInfo
+        $null = $process.Start()
+        return $process
+    }
+    catch {
+        return $null
+    }
+}
+
+function Initialize-DirtyStatusPoller {
+    param([System.Windows.Forms.DataGridView]$Grid)
+
+    if ($null -eq $Grid -or $Grid.IsDisposed) {
+        return
+    }
+
+    $script:DirtyStatusGrid = $Grid
+    if ($null -ne $script:DirtyStatusPollTimer) {
+        return
+    }
+
+    $script:DirtyStatusPollTimer = New-Object System.Windows.Forms.Timer
+    $script:DirtyStatusPollTimer.Interval = 120
+    $script:DirtyStatusPollTimer.Add_Tick({
+        try {
+            if ($null -eq $script:DirtyStatusGrid -or $script:DirtyStatusGrid.IsDisposed) {
+                foreach ($processInfo in $script:DirtyStatusProcessInfos) {
+                    $process = $processInfo.Process
+                    if ($null -ne $process) {
+                        try { if (-not $process.HasExited) { $process.Kill() | Out-Null } } catch {}
+                        try { $process.Dispose() } catch {}
+                    }
+                }
+                $script:DirtyStatusProcessInfos = @()
+                $script:DirtyStatusPollTimer.Stop()
+                return
+            }
+
+            if ($script:DirtyStatusProcessInfos.Count -eq 0) {
+                $script:DirtyStatusPollTimer.Stop()
+                return
+            }
+
+            $remaining = @()
+            foreach ($processInfo in $script:DirtyStatusProcessInfos) {
+                $process = $processInfo.Process
+                if ($null -eq $process) {
+                    continue
+                }
+
+                if (-not $process.HasExited) {
+                    $remaining += $processInfo
+                    continue
+                }
+
+                $state = 'Dirty'
+                try {
+                    $output = $process.StandardOutput.ReadToEnd()
+                    if ($process.ExitCode -eq 0 -and [string]::IsNullOrWhiteSpace($output)) {
+                        $state = 'Clean'
+                    }
+                }
+                catch {
+                    $state = 'Dirty'
+                }
+                finally {
+                    try { $process.Dispose() } catch {}
+                }
+
+                Update-DirtyCellsByDirectory -Grid $script:DirtyStatusGrid -Directory ([string]$processInfo.Directory) -State $state
+            }
+
+            $script:DirtyStatusProcessInfos = $remaining
+            if ($script:DirtyStatusProcessInfos.Count -eq 0) {
+                $script:DirtyStatusPollTimer.Stop()
+            }
+        }
+        catch {
+            $script:DirtyStatusPollTimer.Stop()
+        }
+    })
+}
+
+function Start-DirtyStatusRefreshForGrid {
+    param([System.Windows.Forms.DataGridView]$Grid)
+
+    if ($null -eq $Grid -or $Grid.IsDisposed -or -not $Grid.Columns.Contains('Dirty')) {
+        return
+    }
+
+    Initialize-DirtyStatusPoller -Grid $Grid
+    $script:DirtyStatusGrid = $Grid
+    foreach ($processInfo in $script:DirtyStatusProcessInfos) {
+        $process = $processInfo.Process
+        if ($null -ne $process) {
+            try { if (-not $process.HasExited) { $process.Kill() | Out-Null } } catch {}
+            try { $process.Dispose() } catch {}
+        }
+    }
+
+    $script:DirtyStatusProcessInfos = @()
+    if ($null -ne $script:DirtyStatusPollTimer) {
+        $script:DirtyStatusPollTimer.Stop()
+    }
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($row in $Grid.Rows) {
+        if ($row.IsNewRow) {
+            continue
+        }
+
+        $directory = [string]$row.Cells['Directory'].Value
+        if ([string]::IsNullOrWhiteSpace($directory)) {
+            continue
+        }
+
+        $normalizedDirectory = $directory.Trim()
+        if ($seen.Add($normalizedDirectory)) {
+            $process = Start-DirtyStatusProcess -Directory $normalizedDirectory
+            if ($null -eq $process) {
+                Update-DirtyCellsByDirectory -Grid $Grid -Directory $normalizedDirectory -State 'Dirty'
+                continue
+            }
+
+            $script:DirtyStatusProcessInfos += [pscustomobject]@{
+                Directory = $normalizedDirectory
+                Process = $process
+            }
+        }
+    }
+
+    if ($script:DirtyStatusProcessInfos.Count -gt 0 -and $null -ne $script:DirtyStatusPollTimer) {
+        $script:DirtyStatusPollTimer.Start()
+    }
 }
 
 function Open-In10x {
@@ -708,6 +973,7 @@ $split.Panel2.Controls.Add($grid)
 Resize-TopPanelToContent -Panel $topPanel -Split $split
 $form.Add_Shown({
     Resize-TopPanelToContent -Panel $topPanel -Split $split
+    Start-DirtyStatusRefreshForGrid -Grid $grid
 })
 $form.Add_Resize({
     Resize-TopPanelToContent -Panel $topPanel -Split $split
@@ -869,6 +1135,7 @@ function Load-IntoUi {
     $txtFilePilot.Text = $config.FilePilotExe
     $txtDiff.Text = $config.DiffExe
     Refresh-Grid -Grid $grid -Directories $config.Directories
+    Start-DirtyStatusRefreshForGrid -Grid $grid
 }
 
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
@@ -990,6 +1257,17 @@ $grid.Add_MessageEnterPressed({
     $rowIndex = $grid.CurrentCell.RowIndex
     $grid.EndEdit() | Out-Null
     Invoke-GitCommitFromRow -Grid $grid -RowIndex $rowIndex
+})
+
+$form.Add_FormClosed({
+    if ($null -ne $script:DirtyStatusPollTimer) {
+        $script:DirtyStatusPollTimer.Stop()
+        $script:DirtyStatusPollTimer.Dispose()
+        $script:DirtyStatusPollTimer = $null
+    }
+
+    $script:DirtyStatusProcessInfos = @()
+    $script:DirtyStatusGrid = $null
 })
 
 Load-IntoUi
