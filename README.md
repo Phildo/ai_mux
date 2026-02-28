@@ -39,7 +39,7 @@ repo2,D:\work\repo2
 
 - `AI`: opens `cmd` in that directory and runs `AGENT_CMD`.
 - `10x`: finds first `*.10x` recursively and opens it in 10x; if none, opens the directory in 10x.
-- `Git`: opens `cmd` and runs `git add . && git commit -m "stuff"`.
+- `message` cell: type a commit message and press `Enter` to run `git add . && git commit -m "<message>" && git pull`.
 - `Diff`: opens the configured `DIFF_EXE` with that folder path as its argument.
 - `Exe`: runs `run.bat` in that folder (button is blank when no `run.bat` is present).
 - `Build`: runs `buildrelease.bat` in that folder (`Build` button text).

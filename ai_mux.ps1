@@ -8,6 +8,65 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+if (-not ('AiMuxControls.MessageEnterDataGridView' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Windows.Forms;
+
+namespace AiMuxControls
+{
+    public class MessageEnterDataGridView : DataGridView
+    {
+        public event EventHandler MessageEnterPressed;
+
+        private bool IsMessageCellFocused()
+        {
+            if (this.CurrentCell == null || this.CurrentCell.OwningColumn == null)
+            {
+                return false;
+            }
+
+            return string.Equals(this.CurrentCell.OwningColumn.Name, "Message", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool TryHandleEnterKey(Keys keyData)
+        {
+            if ((keyData & Keys.KeyCode) != Keys.Enter || !IsMessageCellFocused())
+            {
+                return false;
+            }
+
+            if (MessageEnterPressed != null)
+            {
+                MessageEnterPressed(this, EventArgs.Empty);
+            }
+            return true;
+        }
+
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            if (TryHandleEnterKey(keyData))
+            {
+                return true;
+            }
+
+            return base.ProcessDialogKey(keyData);
+        }
+
+        protected override bool ProcessDataGridViewKey(KeyEventArgs e)
+        {
+            if (e != null && TryHandleEnterKey(e.KeyData))
+            {
+                return true;
+            }
+
+            return base.ProcessDataGridViewKey(e);
+        }
+    }
+}
+"@ -ReferencedAssemblies @('System.Windows.Forms.dll', 'System.Drawing.dll')
+}
+
 function Get-DirectoryNameFromPath {
     param([string]$Path)
 
@@ -182,6 +241,22 @@ function Start-CmdInDirectory {
     }
 
     Start-Process -FilePath 'cmd.exe' -ArgumentList $args | Out-Null
+}
+
+function Start-GitCommitInDirectory {
+    param(
+        [string]$Directory,
+        [string]$Message
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Message)) {
+        [System.Windows.Forms.MessageBox]::Show('Enter a commit message first.', 'ai_mux', 'OK', 'Warning') | Out-Null
+        return $false
+    }
+
+    $safeMessage = $Message.Trim().Replace('"', "'")
+    Start-CmdInDirectory -Directory $Directory -Command "git add . && git commit -m `"$safeMessage`" && git pull"
+    return $true
 }
 
 function Open-In10x {
@@ -539,7 +614,7 @@ $hint.AutoSize = $true
 $hint.Location = New-Object System.Drawing.Point(670, 76)
 $topPanel.Controls.Add($hint)
 
-$grid = New-Object System.Windows.Forms.DataGridView
+$grid = New-Object AiMuxControls.MessageEnterDataGridView
 $grid.Dock = 'Fill'
 $grid.AllowUserToAddRows = $false
 $grid.AllowUserToResizeRows = $false
@@ -548,6 +623,7 @@ $grid.SelectionMode = 'FullRowSelect'
 $grid.MultiSelect = $false
 $grid.AutoSizeRowsMode = 'None'
 $grid.ReadOnly = $false
+$grid.EditMode = [System.Windows.Forms.DataGridViewEditMode]::EditOnEnter
 $split.Panel1.Controls.Add($topPanel)
 $split.Panel2.Controls.Add($grid)
 Resize-TopPanelToContent -Panel $topPanel -Split $split
@@ -598,7 +674,6 @@ $grid.Columns.Add($colMessage) | Out-Null
 $gridButtonColors = @{
     'AI' = '#7B1FA2'
     '10x' = '#2E7D32'
-    'Git' = '#1976D2'
     'Diff' = '#66BB6A'
     'Exe' = '#EF6C00'
     'Release' = '#8B0000'
@@ -607,15 +682,15 @@ $gridButtonColors = @{
     'X' = '#C62828'
 }
 
-foreach ($name in @('AI', '10x', 'Git', 'Diff', 'Exe', 'Release', 'Cmd', 'Folder', 'X')) {
+foreach ($name in @('AI', '10x', 'Diff', 'Exe', 'Release', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
     $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'x' } else { $name }
     $col.Name = $name
-    $col.HeaderText = $displayName
+    $col.HeaderText = if ($name -eq 'X') { '' } else { $displayName }
     $col.Text = $displayName
     $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Release')
     if ($name -eq 'X') {
-        $col.Width = 40
+        $col.Width = 30
     }
     elseif ($name -eq 'Folder') {
         $col.Width = 40
@@ -638,17 +713,37 @@ foreach ($name in @('AI', '10x', 'Git', 'Diff', 'Exe', 'Release', 'Cmd', 'Folder
     $grid.Columns.Add($col) | Out-Null
 }
 
-$grid.Columns['Name'].DisplayIndex = 0
-$grid.Columns['AI'].DisplayIndex = 1
-$grid.Columns['10x'].DisplayIndex = 2
-$grid.Columns['Message'].DisplayIndex = 3
-$grid.Columns['Git'].DisplayIndex = 4
+$grid.Columns['X'].DisplayIndex = 0
+$grid.Columns['Name'].DisplayIndex = 1
+$grid.Columns['AI'].DisplayIndex = 2
+$grid.Columns['10x'].DisplayIndex = 3
+$grid.Columns['Message'].DisplayIndex = 4
 $grid.Columns['Diff'].DisplayIndex = 5
 $grid.Columns['Release'].DisplayIndex = 6
 $grid.Columns['Exe'].DisplayIndex = 7
 $grid.Columns['Cmd'].DisplayIndex = 8
 $grid.Columns['Folder'].DisplayIndex = 9
-$grid.Columns['X'].DisplayIndex = 10
+
+function Invoke-GitCommitFromRow {
+    param(
+        [System.Windows.Forms.DataGridView]$Grid,
+        [int]$RowIndex
+    )
+
+    if ($null -eq $Grid -or $RowIndex -lt 0 -or $RowIndex -ge $Grid.Rows.Count) {
+        return
+    }
+
+    $directory = [string]$Grid.Rows[$RowIndex].Cells['Directory'].Value
+    if ([string]::IsNullOrWhiteSpace($directory)) {
+        return
+    }
+
+    $message = [string]$Grid.Rows[$RowIndex].Cells['Message'].Value
+    if (Start-GitCommitInDirectory -Directory $directory.Trim() -Message $message) {
+        $Grid.Rows[$RowIndex].Cells['Message'].Value = ''
+    }
+}
 
 function Refresh-Grid {
     param(
@@ -766,18 +861,6 @@ $grid.Add_CellContentClick({
         '10x' {
             Open-In10x -Directory $directory -TenxExe $txtTenx.Text
         }
-        'Git' {
-            $rawMessage = [string]$grid.Rows[$e.RowIndex].Cells['Message'].Value
-            $message = $rawMessage.Trim()
-            if ([string]::IsNullOrWhiteSpace($message)) {
-                [System.Windows.Forms.MessageBox]::Show('Enter a commit message first.', 'ai_mux', 'OK', 'Warning') | Out-Null
-                return
-            }
-
-            $safeMessage = $message.Replace('"', "'")
-            Start-CmdInDirectory -Directory $directory -Command "git add . && git commit -m `"$safeMessage`" && git pull"
-            $grid.Rows[$e.RowIndex].Cells['Message'].Value = ''
-        }
         'Diff' {
             Open-InDiff -Directory $directory -DiffExe $txtDiff.Text
         }
@@ -797,6 +880,16 @@ $grid.Add_CellContentClick({
             $grid.Rows.RemoveAt($e.RowIndex)
         }
     }
+})
+
+$grid.Add_MessageEnterPressed({
+    if ($null -eq $grid.CurrentCell) {
+        return
+    }
+
+    $rowIndex = $grid.CurrentCell.RowIndex
+    $grid.EndEdit() | Out-Null
+    Invoke-GitCommitFromRow -Grid $grid -RowIndex $rowIndex
 })
 
 Load-IntoUi
