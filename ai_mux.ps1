@@ -319,10 +319,22 @@ function Start-BuildReleaseBatInDirectory {
     }
 
     try {
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"`"$buildReleaseBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+        $runBatPath = Get-RunBatPath -Directory $Directory
+        $command = if ([string]::IsNullOrWhiteSpace($runBatPath)) {
+            "call `"$buildReleaseBatPath`""
+        }
+        else {
+            "call `"$buildReleaseBatPath`" && call `"$runBatPath`""
+        }
+
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $command" -WorkingDirectory $Directory | Out-Null
+
+        if ([string]::IsNullOrWhiteSpace($runBatPath)) {
+            [System.Windows.Forms.MessageBox]::Show("run.bat not found in: $Directory`r`nExecuted buildrelease.bat only.", 'ai_mux', 'OK', 'Warning') | Out-Null
+        }
     }
     catch {
-        [System.Windows.Forms.MessageBox]::Show("Failed to run '$buildReleaseBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Failed to run buildrelease.bat + run.bat in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
     }
 }
 
@@ -372,6 +384,10 @@ function Resize-TopPanelToContent {
         [System.Windows.Forms.SplitContainer]$Split
     )
 
+    if ($Split.Panel1Collapsed) {
+        return
+    }
+
     $maxBottom = 0
     foreach ($control in $Panel.Controls) {
         if ($control.Bottom -gt $maxBottom) {
@@ -401,8 +417,27 @@ function Resize-TopPanelToContent {
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ai_mux'
 $form.Width = 550
-$form.Height = 420
+$form.Height = 250
 $form.StartPosition = 'CenterScreen'
+
+$layout = New-Object System.Windows.Forms.TableLayoutPanel
+$layout.Dock = 'Fill'
+$layout.ColumnCount = 1
+$layout.RowCount = 2
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 36)))
+$layout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$form.Controls.Add($layout)
+
+$configBar = New-Object System.Windows.Forms.Panel
+$configBar.Dock = 'Fill'
+$configBar.Padding = New-Object System.Windows.Forms.Padding(8, 6, 8, 6)
+$layout.Controls.Add($configBar, 0, 0)
+
+$btnToggleConfig = New-Object System.Windows.Forms.Button
+$btnToggleConfig.Text = 'Config'
+$btnToggleConfig.Width = 95
+$btnToggleConfig.Location = New-Object System.Drawing.Point(8, 6)
+$configBar.Controls.Add($btnToggleConfig)
 
 $split = New-Object System.Windows.Forms.SplitContainer
 $split.Dock = 'Fill'
@@ -411,7 +446,7 @@ $split.FixedPanel = [System.Windows.Forms.FixedPanel]::Panel1
 $split.IsSplitterFixed = $true
 $split.SplitterWidth = 4
 $split.Panel1MinSize = 100
-$form.Controls.Add($split)
+$layout.Controls.Add($split, 0, 1)
 
 $topPanel = New-Object System.Windows.Forms.Panel
 $topPanel.Dock = 'Fill'
@@ -512,7 +547,7 @@ $grid.RowHeadersVisible = $false
 $grid.SelectionMode = 'FullRowSelect'
 $grid.MultiSelect = $false
 $grid.AutoSizeRowsMode = 'None'
-$grid.ReadOnly = $true
+$grid.ReadOnly = $false
 $split.Panel1.Controls.Add($topPanel)
 $split.Panel2.Controls.Add($grid)
 Resize-TopPanelToContent -Panel $topPanel -Split $split
@@ -522,6 +557,17 @@ $form.Add_Shown({
 $form.Add_Resize({
     Resize-TopPanelToContent -Panel $topPanel -Split $split
 })
+$btnToggleConfig.Add_Click({
+    $split.Panel1Collapsed = -not $split.Panel1Collapsed
+    if ($split.Panel1Collapsed) {
+        $btnToggleConfig.Text = 'Config'
+        return
+    }
+
+    $btnToggleConfig.Text = 'Hide Config'
+    Resize-TopPanelToContent -Panel $topPanel -Split $split
+})
+$split.Panel1Collapsed = $true
 
 $colDirectory = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colDirectory.Name = 'Directory'
@@ -541,6 +587,13 @@ $grid.Columns['Name'].AutoSizeMode = 'Fill'
 $grid.Columns['Name'].ReadOnly = $true
 $colDirectory.AutoSizeMode = 'Fill'
 $colDirectory.ReadOnly = $true
+
+$colMessage = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colMessage.Name = 'Message'
+$colMessage.HeaderText = 'message'
+$colMessage.Width = 70
+$colMessage.ReadOnly = $false
+$grid.Columns.Add($colMessage) | Out-Null
 
 $gridButtonColors = @{
     'AI' = '#7B1FA2'
@@ -584,6 +637,18 @@ foreach ($name in @('AI', '10x', 'Git', 'Diff', 'Exe', 'Release', 'Cmd', 'Folder
 
     $grid.Columns.Add($col) | Out-Null
 }
+
+$grid.Columns['Name'].DisplayIndex = 0
+$grid.Columns['AI'].DisplayIndex = 1
+$grid.Columns['10x'].DisplayIndex = 2
+$grid.Columns['Message'].DisplayIndex = 3
+$grid.Columns['Git'].DisplayIndex = 4
+$grid.Columns['Diff'].DisplayIndex = 5
+$grid.Columns['Release'].DisplayIndex = 6
+$grid.Columns['Exe'].DisplayIndex = 7
+$grid.Columns['Cmd'].DisplayIndex = 8
+$grid.Columns['Folder'].DisplayIndex = 9
+$grid.Columns['X'].DisplayIndex = 10
 
 function Refresh-Grid {
     param(
@@ -702,7 +767,16 @@ $grid.Add_CellContentClick({
             Open-In10x -Directory $directory -TenxExe $txtTenx.Text
         }
         'Git' {
-            Start-CmdInDirectory -Directory $directory -Command 'git add . && git commit -m "stuff" && git pull'
+            $rawMessage = [string]$grid.Rows[$e.RowIndex].Cells['Message'].Value
+            $message = $rawMessage.Trim()
+            if ([string]::IsNullOrWhiteSpace($message)) {
+                [System.Windows.Forms.MessageBox]::Show('Enter a commit message first.', 'ai_mux', 'OK', 'Warning') | Out-Null
+                return
+            }
+
+            $safeMessage = $message.Replace('"', "'")
+            Start-CmdInDirectory -Directory $directory -Command "git add . && git commit -m `"$safeMessage`" && git pull"
+            $grid.Rows[$e.RowIndex].Cells['Message'].Value = ''
         }
         'Diff' {
             Open-InDiff -Directory $directory -DiffExe $txtDiff.Text
