@@ -249,14 +249,27 @@ function Start-GitCommitInDirectory {
         [string]$Message
     )
 
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        return $false
+    }
+
     if ([string]::IsNullOrWhiteSpace($Message)) {
         [System.Windows.Forms.MessageBox]::Show('Enter a commit message first.', 'ai_mux', 'OK', 'Warning') | Out-Null
         return $false
     }
 
     $safeMessage = $Message.Trim().Replace('"', "'")
-    Start-CmdInDirectory -Directory $Directory -Command "git add . && git commit -m `"$safeMessage`" && git pull"
-    return $true
+    $command = "git add . && git commit -m `"$safeMessage`" && git pull"
+
+    try {
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $command" -WorkingDirectory $Directory | Out-Null
+        return $true
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to run git command in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        return $false
+    }
 }
 
 function Open-In10x {
@@ -666,7 +679,7 @@ $colDirectory.ReadOnly = $true
 
 $colMessage = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colMessage.Name = 'Message'
-$colMessage.HeaderText = 'message'
+$colMessage.HeaderText = 'Git'
 $colMessage.Width = 70
 $colMessage.ReadOnly = $false
 $grid.Columns.Add($colMessage) | Out-Null
@@ -742,6 +755,12 @@ function Invoke-GitCommitFromRow {
     $message = [string]$Grid.Rows[$RowIndex].Cells['Message'].Value
     if (Start-GitCommitInDirectory -Directory $directory.Trim() -Message $message) {
         $Grid.Rows[$RowIndex].Cells['Message'].Value = ''
+
+        if ($Grid.Columns.Contains('Name')) {
+            $Grid.ClearSelection()
+            $Grid.Rows[$RowIndex].Selected = $true
+            $Grid.CurrentCell = $Grid.Rows[$RowIndex].Cells['Name']
+        }
     }
 }
 
