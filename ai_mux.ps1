@@ -331,7 +331,7 @@ function Start-GitCommitInDirectory {
     }
 
     $safeMessage = $Message.Trim().Replace('"', "'")
-    $command = "git add . && git commit -m `"$safeMessage`" && git pull"
+    $command = "git add . && git commit -m `"$safeMessage`" && git pull && git push"
 
     try {
         Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $command" -WorkingDirectory $Directory | Out-Null
