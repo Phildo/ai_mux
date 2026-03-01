@@ -856,7 +856,7 @@ function Resize-TopPanelToContent {
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ai_mux'
 $form.Width = 550
-$form.Height = 250
+$form.Height = 275
 $form.StartPosition = 'CenterScreen'
 
 $layout = New-Object System.Windows.Forms.TableLayoutPanel
