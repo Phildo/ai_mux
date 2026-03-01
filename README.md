@@ -39,7 +39,8 @@ repo2,D:\work\repo2
 
 - `AI`: opens `cmd` in that directory and runs `AGENT_CMD`.
 - `10x`: finds first `*.10x` recursively and opens it in 10x; if none, opens the directory in 10x.
-- `Git` cell: type a commit message and press `Enter` to run `git add . && git commit -m "<message>" && git pull && git push`.
+- `Push` cell: type a commit message and press `Enter` to run `git add . && git commit -m "<message>" && git push`.
+- `Pull`: runs `git pull` in that folder; click the `Pull` column header to run pull for all rows.
 - `Diff`: opens the configured `DIFF_EXE` with that folder path as its argument.
 - `Dirty` (`?` button): auto-checks on load in the background, and you can click `?` to refresh manually with `git status --porcelain`; green means clean, red means dirty.
 - `Exe`: runs `run.bat` in that folder (button is blank when no `run.bat` is present).

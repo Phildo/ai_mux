@@ -331,7 +331,7 @@ function Start-GitCommitInDirectory {
     }
 
     $safeMessage = $Message.Trim().Replace('"', "'")
-    $command = "git add . && git commit -m `"$safeMessage`" && git pull && git push"
+    $command = "git add . && git commit -m `"$safeMessage`" && git push"
 
     try {
         Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $command" -WorkingDirectory $Directory | Out-Null
@@ -339,6 +339,26 @@ function Start-GitCommitInDirectory {
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to run git command in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        return $false
+    }
+}
+
+function Start-GitPullInDirectory {
+    param(
+        [string]$Directory
+    )
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        return $false
+    }
+
+    try {
+        Start-Process -FilePath 'cmd.exe' -ArgumentList '/c git pull' -WorkingDirectory $Directory | Out-Null
+        return $true
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to run git pull in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
         return $false
     }
 }
@@ -1012,7 +1032,7 @@ $colDirectory.ReadOnly = $true
 
 $colMessage = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colMessage.Name = 'Message'
-$colMessage.HeaderText = 'Git'
+$colMessage.HeaderText = 'Push'
 $colMessage.Width = 70
 $colMessage.ReadOnly = $false
 $grid.Columns.Add($colMessage) | Out-Null
@@ -1021,6 +1041,7 @@ $gridButtonColors = @{
     'AI' = '#7B1FA2'
     '10x' = '#2E7D32'
     'Diff' = '#66BB6A'
+    'Pull' = '#1565C0'
     'Dirty' = '#9E9E9E'
     'Exe' = '#EF6C00'
     'Release' = '#8B0000'
@@ -1029,7 +1050,7 @@ $gridButtonColors = @{
     'X' = '#C62828'
 }
 
-foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Exe', 'Release', 'Cmd', 'Folder', 'X')) {
+foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Release', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
     $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'x' } elseif ($name -eq 'Dirty') { '?' } else { $name }
     $col.Name = $name
@@ -1070,16 +1091,23 @@ $grid.Columns['10x'].DisplayIndex = 3
 $grid.Columns['Diff'].DisplayIndex = 4
 $grid.Columns['Dirty'].DisplayIndex = 5
 $grid.Columns['Message'].DisplayIndex = 6
-$grid.Columns['Release'].DisplayIndex = 7
-$grid.Columns['Exe'].DisplayIndex = 8
-$grid.Columns['Cmd'].DisplayIndex = 9
-$grid.Columns['Folder'].DisplayIndex = 10
+$grid.Columns['Pull'].DisplayIndex = 7
+$grid.Columns['Release'].DisplayIndex = 8
+$grid.Columns['Exe'].DisplayIndex = 9
+$grid.Columns['Cmd'].DisplayIndex = 10
+$grid.Columns['Folder'].DisplayIndex = 11
 $dirtyHeaderColor = [System.Drawing.ColorTranslator]::FromHtml('#9E9E9E')
 $grid.Columns['Dirty'].HeaderCell.Style.BackColor = $dirtyHeaderColor
 $grid.Columns['Dirty'].HeaderCell.Style.ForeColor = [System.Drawing.Color]::White
 $grid.Columns['Dirty'].HeaderCell.Style.SelectionBackColor = $dirtyHeaderColor
 $grid.Columns['Dirty'].HeaderCell.Style.SelectionForeColor = [System.Drawing.Color]::White
 $grid.Columns['Dirty'].HeaderCell.ToolTipText = 'Refresh Dirty for all rows'
+$pullHeaderColor = [System.Drawing.ColorTranslator]::FromHtml('#1565C0')
+$grid.Columns['Pull'].HeaderCell.Style.BackColor = $pullHeaderColor
+$grid.Columns['Pull'].HeaderCell.Style.ForeColor = [System.Drawing.Color]::White
+$grid.Columns['Pull'].HeaderCell.Style.SelectionBackColor = $pullHeaderColor
+$grid.Columns['Pull'].HeaderCell.Style.SelectionForeColor = [System.Drawing.Color]::White
+$grid.Columns['Pull'].HeaderCell.ToolTipText = 'Run git pull for all rows'
 
 function Invoke-GitCommitFromRow {
     param(
@@ -1106,6 +1134,35 @@ function Invoke-GitCommitFromRow {
             $Grid.Rows[$RowIndex].Selected = $true
             $Grid.CurrentCell = $Grid.Rows[$RowIndex].Cells['Name']
         }
+    }
+}
+
+function Start-GitPullForAllRows {
+    param(
+        [System.Windows.Forms.DataGridView]$Grid
+    )
+
+    if ($null -eq $Grid -or $Grid.IsDisposed) {
+        return
+    }
+
+    $directories = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($row in $Grid.Rows) {
+        if ($row.IsNewRow) {
+            continue
+        }
+
+        $directory = [string]$row.Cells['Directory'].Value
+        if ([string]::IsNullOrWhiteSpace($directory)) {
+            continue
+        }
+
+        $trimmedDirectory = $directory.Trim()
+        if (-not $directories.Add($trimmedDirectory)) {
+            continue
+        }
+
+        Start-GitPullInDirectory -Directory $trimmedDirectory | Out-Null
     }
 }
 
@@ -1205,11 +1262,14 @@ $grid.Add_ColumnHeaderMouseClick({
         return
     }
 
-    if ($grid.Columns[$e.ColumnIndex].Name -ne 'Dirty') {
-        return
+    switch ($grid.Columns[$e.ColumnIndex].Name) {
+        'Dirty' {
+            Start-DirtyStatusRefreshForGrid -Grid $grid
+        }
+        'Pull' {
+            Start-GitPullForAllRows -Grid $grid
+        }
     }
-
-    Start-DirtyStatusRefreshForGrid -Grid $grid
 })
 
 $grid.Add_CellContentClick({
@@ -1251,6 +1311,9 @@ $grid.Add_CellContentClick({
             else {
                 Set-DirtyCellState -Row $grid.Rows[$e.RowIndex] -State 'Dirty'
             }
+        }
+        'Pull' {
+            Start-GitPullInDirectory -Directory $directory
         }
         'Cmd' {
             Start-CmdInDirectory -Directory $directory -Command ''
