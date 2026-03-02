@@ -158,10 +158,129 @@ function Get-DirectoryNameFromPath {
     return $name
 }
 
+function Normalize-CmdColorComponent {
+    param([string]$ColorComponent)
+
+    if ([string]::IsNullOrWhiteSpace($ColorComponent)) {
+        return ''
+    }
+
+    $normalized = $ColorComponent.Trim().ToUpperInvariant()
+    if ($normalized -match '^[0-9A-F]$') {
+        return $normalized
+    }
+
+    return ''
+}
+
+function Normalize-CmdColorCode {
+    param([string]$ColorCode)
+
+    if ([string]::IsNullOrWhiteSpace($ColorCode)) {
+        return ''
+    }
+
+    $normalized = $ColorCode.Trim().ToUpperInvariant()
+    if ($normalized -match '^[0-9A-F]{2}$') {
+        return $normalized
+    }
+
+    return ''
+}
+
+function Get-DefaultCmdColorCodeForDirectory {
+    param([string]$Directory)
+
+    $normalizedDirectory = if ([string]::IsNullOrWhiteSpace($Directory)) { '' } else { $Directory.Trim() }
+    $palette = @('0A', '0B', '0C', '0D', '0E', '1A', '1B', '1E', '2A', '2B', '3A', '3B', '4A', '5B')
+    $checksum = 0
+    foreach ($ch in $normalizedDirectory.ToCharArray()) {
+        $checksum += [int][char]$ch
+    }
+
+    return $palette[$checksum % $palette.Count]
+}
+
+function Resolve-CmdColorCode {
+    param(
+        [string]$Directory,
+        [string]$ColorCode = '',
+        [string]$BackgroundColor = '',
+        [string]$TextColor = ''
+    )
+
+    $defaultCode = Get-DefaultCmdColorCodeForDirectory -Directory $Directory
+    $defaultBackground = $defaultCode.Substring(0, 1)
+    $defaultText = $defaultCode.Substring(1, 1)
+
+    $normalizedCode = Normalize-CmdColorCode -ColorCode $ColorCode
+    $codeBackground = $defaultBackground
+    $codeText = $defaultText
+    if (-not [string]::IsNullOrWhiteSpace($normalizedCode)) {
+        $codeBackground = $normalizedCode.Substring(0, 1)
+        $codeText = $normalizedCode.Substring(1, 1)
+    }
+
+    $resolvedBackground = Normalize-CmdColorComponent -ColorComponent $BackgroundColor
+    if ([string]::IsNullOrWhiteSpace($resolvedBackground)) {
+        $resolvedBackground = $codeBackground
+    }
+
+    $resolvedText = Normalize-CmdColorComponent -ColorComponent $TextColor
+    if ([string]::IsNullOrWhiteSpace($resolvedText)) {
+        $resolvedText = $codeText
+    }
+
+    if ($resolvedBackground -eq $resolvedText) {
+        $resolvedText = if ($resolvedBackground -in @('7', 'A', 'B', 'C', 'D', 'E', 'F')) { '0' } else { 'F' }
+    }
+
+    return "$resolvedBackground$resolvedText"
+}
+
+function Get-ConsoleColorFromHexDigit {
+    param([char]$HexDigit)
+
+    $digit = [string]$HexDigit
+    switch ($digit.ToUpperInvariant()) {
+        '0' { return [System.Drawing.Color]::FromArgb(0, 0, 0) }
+        '1' { return [System.Drawing.Color]::FromArgb(0, 0, 128) }
+        '2' { return [System.Drawing.Color]::FromArgb(0, 128, 0) }
+        '3' { return [System.Drawing.Color]::FromArgb(0, 128, 128) }
+        '4' { return [System.Drawing.Color]::FromArgb(128, 0, 0) }
+        '5' { return [System.Drawing.Color]::FromArgb(128, 0, 128) }
+        '6' { return [System.Drawing.Color]::FromArgb(128, 128, 0) }
+        '7' { return [System.Drawing.Color]::FromArgb(192, 192, 192) }
+        '8' { return [System.Drawing.Color]::FromArgb(128, 128, 128) }
+        '9' { return [System.Drawing.Color]::FromArgb(0, 0, 255) }
+        'A' { return [System.Drawing.Color]::FromArgb(0, 255, 0) }
+        'B' { return [System.Drawing.Color]::FromArgb(0, 255, 255) }
+        'C' { return [System.Drawing.Color]::FromArgb(255, 0, 0) }
+        'D' { return [System.Drawing.Color]::FromArgb(255, 0, 255) }
+        'E' { return [System.Drawing.Color]::FromArgb(255, 255, 0) }
+        'F' { return [System.Drawing.Color]::FromArgb(255, 255, 255) }
+        default { return [System.Drawing.Color]::Black }
+    }
+}
+
+function Get-ReadableTextColor {
+    param([System.Drawing.Color]$BackgroundColor)
+
+    $luminance = (0.2126 * $BackgroundColor.R) + (0.7152 * $BackgroundColor.G) + (0.0722 * $BackgroundColor.B)
+    if ($luminance -gt 140) {
+        return [System.Drawing.Color]::Black
+    }
+
+    return [System.Drawing.Color]::White
+}
+
 function New-DirectoryEntry {
     param(
         [string]$Name,
-        [string]$Path
+        [string]$Path,
+        [string]$CmdBgColor = '',
+        [string]$CmdTextColor = '',
+        [string]$CmdColor = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -180,9 +299,14 @@ function New-DirectoryEntry {
         $resolvedName = $trimmedPath
     }
 
+    $resolvedCmdColor = Resolve-CmdColorCode -Directory $trimmedPath -ColorCode $CmdColor -BackgroundColor $CmdBgColor -TextColor $CmdTextColor
+
     return [pscustomobject]@{
         Name = $resolvedName
         Path = $trimmedPath
+        CmdBgColor = $resolvedCmdColor.Substring(0, 1)
+        CmdTextColor = $resolvedCmdColor.Substring(1, 1)
+        CmdColor = $resolvedCmdColor
     }
 }
 
@@ -217,14 +341,34 @@ function Load-Config {
         if ($inDirsSection) {
             $entryName = ''
             $entryPath = $line
+            $entryCmdBgColor = ''
+            $entryCmdTextColor = ''
+            $entryCmdColor = ''
 
             if ($line.Contains(',')) {
                 $parts = $line.Split(',', 2)
                 $entryName = $parts[0].Trim()
-                $entryPath = $parts[1].Trim()
+                $entryPathAndMaybeColor = $parts[1].Trim()
+
+                $bgTextMatch = [System.Text.RegularExpressions.Regex]::Match($entryPathAndMaybeColor, '^(?<path>.*?),(?<bg>[0-9A-Fa-f]),(?<text>[0-9A-Fa-f])$')
+                if ($bgTextMatch.Success) {
+                    $entryPath = $bgTextMatch.Groups['path'].Value.Trim()
+                    $entryCmdBgColor = $bgTextMatch.Groups['bg'].Value.Trim()
+                    $entryCmdTextColor = $bgTextMatch.Groups['text'].Value.Trim()
+                }
+                else {
+                    $colorMatch = [System.Text.RegularExpressions.Regex]::Match($entryPathAndMaybeColor, '^(?<path>.*),(?<color>[0-9A-Fa-f]{2})$')
+                    if ($colorMatch.Success) {
+                        $entryPath = $colorMatch.Groups['path'].Value.Trim()
+                        $entryCmdColor = $colorMatch.Groups['color'].Value.Trim()
+                    }
+                    else {
+                        $entryPath = $entryPathAndMaybeColor
+                    }
+                }
             }
 
-            $entry = New-DirectoryEntry -Name $entryName -Path $entryPath
+            $entry = New-DirectoryEntry -Name $entryName -Path $entryPath -CmdBgColor $entryCmdBgColor -CmdTextColor $entryCmdTextColor -CmdColor $entryCmdColor
             if ($null -ne $entry) {
                 $config.Directories.Add($entry)
             }
@@ -271,6 +415,9 @@ function Save-Config {
     foreach ($entry in $Directories) {
         $dirPath = ''
         $dirName = ''
+        $dirCmdBgColor = ''
+        $dirCmdTextColor = ''
+        $dirCmdColor = ''
 
         if ($entry -is [string]) {
             $dirPath = $entry.Trim()
@@ -279,6 +426,15 @@ function Save-Config {
         else {
             $dirPath = [string]$entry.Path
             $dirName = [string]$entry.Name
+            if ($entry.PSObject.Properties['CmdBgColor']) {
+                $dirCmdBgColor = [string]$entry.CmdBgColor
+            }
+            if ($entry.PSObject.Properties['CmdTextColor']) {
+                $dirCmdTextColor = [string]$entry.CmdTextColor
+            }
+            if ($entry.PSObject.Properties['CmdColor']) {
+                $dirCmdColor = [string]$entry.CmdColor
+            }
         }
 
         if ([string]::IsNullOrWhiteSpace($dirPath)) {
@@ -289,16 +445,67 @@ function Save-Config {
             $dirName = Get-DirectoryNameFromPath -Path $dirPath
         }
 
-        $lines.Add("$dirName,$dirPath")
+        $resolvedCmdColor = Resolve-CmdColorCode -Directory $dirPath -ColorCode $dirCmdColor -BackgroundColor $dirCmdBgColor -TextColor $dirCmdTextColor
+        $resolvedBackground = $resolvedCmdColor.Substring(0, 1)
+        $resolvedText = $resolvedCmdColor.Substring(1, 1)
+        $lines.Add("$dirName,$dirPath,$resolvedBackground,$resolvedText")
     }
 
     Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
 }
 
+function Escape-ForCmdCommandLiteral {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+
+    $escaped = $Value.Replace('^', '^^')
+    $escaped = $escaped.Replace('&', '^&')
+    $escaped = $escaped.Replace('|', '^|')
+    $escaped = $escaped.Replace('<', '^<')
+    $escaped = $escaped.Replace('>', '^>')
+    $escaped = $escaped.Replace('(', '^(')
+    $escaped = $escaped.Replace(')', '^)')
+    $escaped = $escaped.Replace('%', '%%')
+    return $escaped
+}
+
+function Get-CmdWindowDecorators {
+    param(
+        [string]$Directory,
+        [string]$CmdColor
+    )
+
+    $projectName = Get-DirectoryNameFromPath -Path $Directory
+    if ([string]::IsNullOrWhiteSpace($projectName)) {
+        $projectName = 'shell'
+    }
+
+    $color = Resolve-CmdColorCode -Directory $Directory -ColorCode $CmdColor
+    return [pscustomobject]@{
+        Title = $projectName
+        Color = $color
+    }
+}
+
+function Get-CmdPrefixCommands {
+    param(
+        [string]$Directory,
+        [string]$CmdColor
+    )
+
+    $decorators = Get-CmdWindowDecorators -Directory $Directory -CmdColor $CmdColor
+    $safeTitle = Escape-ForCmdCommandLiteral -Value ([string]$decorators.Title)
+    return "title $safeTitle && color $($decorators.Color)"
+}
+
 function Start-CmdInDirectory {
     param(
         [string]$Directory,
-        [string]$Command
+        [string]$Command,
+        [string]$CmdColor = ''
     )
 
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
@@ -306,7 +513,8 @@ function Start-CmdInDirectory {
         return
     }
 
-    $args = "/K cd /d `"$Directory`""
+    $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
+    $args = "/K $prefix && cd /d `"$Directory`""
     if (-not [string]::IsNullOrWhiteSpace($Command)) {
         $args += " && $Command"
     }
@@ -317,7 +525,8 @@ function Start-CmdInDirectory {
 function Start-GitCommitInDirectory {
     param(
         [string]$Directory,
-        [string]$Message
+        [string]$Message,
+        [string]$CmdColor = ''
     )
 
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
@@ -334,7 +543,8 @@ function Start-GitCommitInDirectory {
     $command = "git add . && git commit -m `"$safeMessage`" && git push"
 
     try {
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $command" -WorkingDirectory $Directory | Out-Null
+        $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && $command" -WorkingDirectory $Directory | Out-Null
         return $true
     }
     catch {
@@ -345,7 +555,8 @@ function Start-GitCommitInDirectory {
 
 function Start-GitPullInDirectory {
     param(
-        [string]$Directory
+        [string]$Directory,
+        [string]$CmdColor = ''
     )
 
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
@@ -354,7 +565,8 @@ function Start-GitPullInDirectory {
     }
 
     try {
-        Start-Process -FilePath 'cmd.exe' -ArgumentList '/c git pull' -WorkingDirectory $Directory | Out-Null
+        $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && git pull" -WorkingDirectory $Directory | Out-Null
         return $true
     }
     catch {
@@ -727,7 +939,10 @@ function Get-DebugBatPath {
 }
 
 function Start-RunBatInDirectory {
-    param([string]$Directory)
+    param(
+        [string]$Directory,
+        [string]$CmdColor = ''
+    )
 
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
         [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
@@ -741,7 +956,8 @@ function Start-RunBatInDirectory {
     }
 
     try {
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"`"$runBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+        $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && call `"`"$runBatPath`"`"" -WorkingDirectory $Directory | Out-Null
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to run '$runBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
@@ -749,7 +965,10 @@ function Start-RunBatInDirectory {
 }
 
 function Start-DebugBatInDirectory {
-    param([string]$Directory)
+    param(
+        [string]$Directory,
+        [string]$CmdColor = ''
+    )
 
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
         [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
@@ -763,7 +982,8 @@ function Start-DebugBatInDirectory {
     }
 
     try {
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"`"$debugBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+        $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && call `"`"$debugBatPath`"`"" -WorkingDirectory $Directory | Out-Null
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to run '$debugBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
@@ -771,7 +991,10 @@ function Start-DebugBatInDirectory {
 }
 
 function Start-BuildReleaseBatInDirectory {
-    param([string]$Directory)
+    param(
+        [string]$Directory,
+        [string]$CmdColor = ''
+    )
 
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
         [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
@@ -793,7 +1016,8 @@ function Start-BuildReleaseBatInDirectory {
             "call `"$buildReleaseBatPath`" && call `"$runBatPath`""
         }
 
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $command" -WorkingDirectory $Directory | Out-Null
+        $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && $command" -WorkingDirectory $Directory | Out-Null
 
         if ([string]::IsNullOrWhiteSpace($runBatPath)) {
             [System.Windows.Forms.MessageBox]::Show("run.bat not found in: $Directory`r`nExecuted buildrelease.bat only.", 'ai_mux', 'OK', 'Warning') | Out-Null
@@ -804,10 +1028,40 @@ function Start-BuildReleaseBatInDirectory {
     }
 }
 
+function Set-XCellColorFromCmdColor {
+    param(
+        [System.Windows.Forms.DataGridViewRow]$Row,
+        [string]$CmdColor
+    )
+
+    if ($null -eq $Row -or $null -eq $Row.DataGridView -or -not $Row.DataGridView.Columns.Contains('X')) {
+        return
+    }
+
+    $directory = ''
+    if ($Row.DataGridView.Columns.Contains('Directory')) {
+        $directory = [string]$Row.Cells['Directory'].Value
+    }
+
+    $resolved = Resolve-CmdColorCode -Directory $directory -ColorCode $CmdColor
+    $background = Get-ConsoleColorFromHexDigit -HexDigit $resolved[0]
+    $foreground = Get-ConsoleColorFromHexDigit -HexDigit $resolved[1]
+    if ($background.ToArgb() -eq $foreground.ToArgb()) {
+        $foreground = Get-ReadableTextColor -BackgroundColor $background
+    }
+
+    $xCell = $Row.Cells['X']
+    $xCell.Style.BackColor = $background
+    $xCell.Style.ForeColor = $foreground
+    $xCell.Style.SelectionBackColor = $background
+    $xCell.Style.SelectionForeColor = $foreground
+}
+
 function Set-ScriptButtonCellValues {
     param(
         [System.Windows.Forms.DataGridViewRow]$Row,
-        [string]$Directory
+        [string]$Directory,
+        [string]$CmdColor = ''
     )
 
     if ($null -eq $Row -or [string]::IsNullOrWhiteSpace($Directory)) {
@@ -817,6 +1071,10 @@ function Set-ScriptButtonCellValues {
     $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Exe' } else { '' }
     $Row.Cells['Dbg'].Value = if (Get-DebugBatPath -Directory $Directory) { 'dbg' } else { '' }
     $Row.Cells['Release'].Value = 'Build'
+    if ($Row.DataGridView.Columns.Contains('CmdColor')) {
+        $Row.Cells['CmdColor'].Value = Resolve-CmdColorCode -Directory $Directory -ColorCode $CmdColor
+    }
+    Set-XCellColorFromCmdColor -Row $Row -CmdColor $CmdColor
     Set-DirtyCellState -Row $Row -State 'Unknown'
 }
 
@@ -839,7 +1097,8 @@ function Get-UniqueDirectoryEntriesFromGrid {
         $dirPath = $pathValue.Trim()
         if ($seen.Add($dirPath)) {
             $nameValue = [string]$row.Cells['Name'].Value
-            $result.Add((New-DirectoryEntry -Name $nameValue -Path $dirPath))
+            $cmdColorValue = if ($Grid.Columns.Contains('CmdColor')) { [string]$row.Cells['CmdColor'].Value } else { '' }
+            $result.Add((New-DirectoryEntry -Name $nameValue -Path $dirPath -CmdColor $cmdColorValue))
         }
     }
 
@@ -1046,6 +1305,12 @@ $colDirectory.HeaderText = 'Directory'
 $colDirectory.Visible = $false
 $grid.Columns.Add($colDirectory) | Out-Null
 
+$colCmdColor = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colCmdColor.Name = 'CmdColor'
+$colCmdColor.HeaderText = 'CmdColor'
+$colCmdColor.Visible = $false
+$grid.Columns.Add($colCmdColor) | Out-Null
+
 $colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colName.Name = 'Name'
 $colName.HeaderText = 'Name'
@@ -1156,7 +1421,8 @@ function Invoke-GitCommitFromRow {
     }
 
     $message = [string]$Grid.Rows[$RowIndex].Cells['Message'].Value
-    if (Start-GitCommitInDirectory -Directory $directory.Trim() -Message $message) {
+    $cmdColor = if ($Grid.Columns.Contains('CmdColor')) { [string]$Grid.Rows[$RowIndex].Cells['CmdColor'].Value } else { '' }
+    if (Start-GitCommitInDirectory -Directory $directory.Trim() -Message $message -CmdColor $cmdColor) {
         $Grid.Rows[$RowIndex].Cells['Message'].Value = ''
         Set-DirtyCellState -Row $Grid.Rows[$RowIndex] -State 'Clean'
 
@@ -1193,7 +1459,8 @@ function Start-GitPullForAllRows {
             continue
         }
 
-        Start-GitPullInDirectory -Directory $trimmedDirectory | Out-Null
+        $cmdColor = if ($Grid.Columns.Contains('CmdColor')) { [string]$row.Cells['CmdColor'].Value } else { '' }
+        Start-GitPullInDirectory -Directory $trimmedDirectory -CmdColor $cmdColor | Out-Null
     }
 }
 
@@ -1218,8 +1485,8 @@ function Refresh-Grid {
             continue
         }
 
-        $rowIndex = $Grid.Rows.Add($normalized.Name, $normalized.Path)
-        Set-ScriptButtonCellValues -Row $Grid.Rows[$rowIndex] -Directory $normalized.Path
+        $rowIndex = $Grid.Rows.Add($normalized.Name, $normalized.Path, $normalized.CmdColor)
+        Set-ScriptButtonCellValues -Row $Grid.Rows[$rowIndex] -Directory $normalized.Path -CmdColor $normalized.CmdColor
     }
 }
 
@@ -1269,9 +1536,13 @@ $btnAddDir.Add_Click({
     $dialog.Description = 'Select a directory to add'
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $selectedPath = $dialog.SelectedPath
-        $name = Get-DirectoryNameFromPath -Path $selectedPath
-        $rowIndex = $grid.Rows.Add($name, $selectedPath)
-        Set-ScriptButtonCellValues -Row $grid.Rows[$rowIndex] -Directory $selectedPath
+        $entry = New-DirectoryEntry -Name '' -Path $selectedPath -CmdColor ''
+        if ($null -eq $entry) {
+            return
+        }
+
+        $rowIndex = $grid.Rows.Add($entry.Name, $entry.Path, $entry.CmdColor)
+        Set-ScriptButtonCellValues -Row $grid.Rows[$rowIndex] -Directory $entry.Path -CmdColor $entry.CmdColor
     }
 })
 
@@ -1312,6 +1583,7 @@ $grid.Add_CellContentClick({
 
     $columnName = $grid.Columns[$e.ColumnIndex].Name
     $directory = [string]$grid.Rows[$e.RowIndex].Cells['Directory'].Value
+    $cmdColor = if ($grid.Columns.Contains('CmdColor')) { [string]$grid.Rows[$e.RowIndex].Cells['CmdColor'].Value } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($directory)) {
         return
@@ -1326,7 +1598,7 @@ $grid.Add_CellContentClick({
                 [System.Windows.Forms.MessageBox]::Show('Set Agent cmd first.', 'ai_mux', 'OK', 'Warning') | Out-Null
                 return
             }
-            Start-CmdInDirectory -Directory $directory -Command $agentCmd
+            Start-CmdInDirectory -Directory $directory -Command $agentCmd -CmdColor $cmdColor
         }
         '10x' {
             Open-In10x -Directory $directory -TenxExe $txtTenx.Text
@@ -1344,19 +1616,19 @@ $grid.Add_CellContentClick({
             }
         }
         'Pull' {
-            Start-GitPullInDirectory -Directory $directory
+            Start-GitPullInDirectory -Directory $directory -CmdColor $cmdColor
         }
         'Cmd' {
-            Start-CmdInDirectory -Directory $directory -Command ''
+            Start-CmdInDirectory -Directory $directory -Command '' -CmdColor $cmdColor
         }
         'Exe' {
-            Start-RunBatInDirectory -Directory $directory
+            Start-RunBatInDirectory -Directory $directory -CmdColor $cmdColor
         }
         'Dbg' {
-            Start-DebugBatInDirectory -Directory $directory
+            Start-DebugBatInDirectory -Directory $directory -CmdColor $cmdColor
         }
         'Release' {
-            Start-BuildReleaseBatInDirectory -Directory $directory
+            Start-BuildReleaseBatInDirectory -Directory $directory -CmdColor $cmdColor
         }
         'Folder' {
             Open-FolderInFilePilot -Directory $directory -FilePilotExe $txtFilePilot.Text

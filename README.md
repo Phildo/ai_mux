@@ -24,20 +24,23 @@ TENX_EXE=10x.exe
 FILEPILOT_EXE=FilePilot.exe
 DIFF_EXE=diff.exe
 [DIRS]
-repo1,C:\path\to\repo1
-repo2,D:\work\repo2
+repo1,C:\path\to\repo1,0,A
+repo2,D:\work\repo2,1,E
 ```
 
 - `AGENT_CMD`: command used by the `AI` button.
 - `TENX_EXE`: path or command name for 10x editor executable.
 - `FILEPILOT_EXE`: path or command name for FilePilot executable.
 - `DIFF_EXE`: path or command name for diff executable.
-- `[DIRS]`: one entry per line in `name,path` format.
+- `[DIRS]`: one entry per line in `name,path,bg,text` format, where `bg` and `text` are single hex digits (`0`-`F`) for cmd background/text colors.
 - Path-only lines are still accepted; the app auto-sets `name` from the folder name when loading/saving.
+- If colors are omitted or invalid, ai_mux uses stable auto-generated defaults for that directory.
 
 ## UI actions per directory
 
 - `AI`: opens `cmd` in that directory and runs `AGENT_CMD`.
+- All launched `cmd` windows are auto-labeled as `<project-folder>` and use each row's configured per-project cmd color.
+- The `x` button for each row is colored from that same cmd color so the row color matches the launched terminal color.
 - `10x`: finds first `*.10x` recursively and opens it in 10x; if none, opens the directory in 10x.
 - `Push` cell: type a commit message and press `Enter` to run `git add . && git commit -m "<message>" && git push`.
 - `Pull`: runs `git pull` in that folder; click the `Pull` column header to run pull for all rows.
