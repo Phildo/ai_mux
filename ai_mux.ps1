@@ -933,7 +933,7 @@ function Get-RunBatPath {
 function Get-BuildReleaseBatPath {
     param([string]$Directory)
 
-    return Get-BatPath -Directory $Directory -FileName 'buildrelease.bat'
+    return Get-BatPath -Directory $Directory -FileName 'build.bat'
 }
 
 function Get-DebugBatPath {
@@ -1007,7 +1007,7 @@ function Start-BuildReleaseBatInDirectory {
 
     $buildReleaseBatPath = Get-BuildReleaseBatPath -Directory $Directory
     if ([string]::IsNullOrWhiteSpace($buildReleaseBatPath)) {
-        [System.Windows.Forms.MessageBox]::Show("buildrelease.bat not found in: $Directory", 'ai_mux', 'OK', 'Warning') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("build.bat not found in: $Directory", 'ai_mux', 'OK', 'Warning') | Out-Null
         return
     }
 
@@ -1024,11 +1024,11 @@ function Start-BuildReleaseBatInDirectory {
         Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && $command" -WorkingDirectory $Directory | Out-Null
 
         if ([string]::IsNullOrWhiteSpace($runBatPath)) {
-            [System.Windows.Forms.MessageBox]::Show("run.bat not found in: $Directory`r`nExecuted buildrelease.bat only.", 'ai_mux', 'OK', 'Warning') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show("run.bat not found in: $Directory`r`nExecuted build.bat only.", 'ai_mux', 'OK', 'Warning') | Out-Null
         }
     }
     catch {
-        [System.Windows.Forms.MessageBox]::Show("Failed to run buildrelease.bat + run.bat in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Failed to run build.bat + run.bat in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
     }
 }
 
@@ -1073,13 +1073,121 @@ function Set-ScriptButtonCellValues {
     }
 
     $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Exe' } else { '' }
-    $Row.Cells['Dbg'].Value = if (Get-DebugBatPath -Directory $Directory) { 'dbg' } else { '' }
-    $Row.Cells['Release'].Value = 'Build'
+    $Row.Cells['Dbg'].Value = if (Get-DebugBatPath -Directory $Directory) { 'Dbg' } else { '' }
+    $Row.Cells['Release'].Value = if (Get-BuildReleaseBatPath -Directory $Directory) { 'Build' } else { '' }
     if ($Row.DataGridView.Columns.Contains('CmdColor')) {
         $Row.Cells['CmdColor'].Value = Resolve-CmdColorCode -Directory $Directory -ColorCode $CmdColor
     }
     Set-XCellColorFromCmdColor -Row $Row -CmdColor $CmdColor
     Set-DirtyCellState -Row $Row -State 'Unknown'
+}
+
+function Test-IsAddProjectRow {
+    param([System.Windows.Forms.DataGridViewRow]$Row)
+
+    if ($null -eq $Row -or $null -eq $Row.DataGridView -or -not $Row.DataGridView.Columns.Contains('IsAddRow')) {
+        return $false
+    }
+
+    $rawValue = $Row.Cells['IsAddRow'].Value
+    if ($null -eq $rawValue) {
+        return $false
+    }
+
+    if ($rawValue -is [bool]) {
+        return [bool]$rawValue
+    }
+
+    return [string]::Equals(([string]$rawValue).Trim(), 'true', [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-AddProjectRowIndex {
+    param([System.Windows.Forms.DataGridView]$Grid)
+
+    if ($null -eq $Grid -or $Grid.IsDisposed) {
+        return -1
+    }
+
+    for ($index = 0; $index -lt $Grid.Rows.Count; $index++) {
+        if (Test-IsAddProjectRow -Row $Grid.Rows[$index]) {
+            return $index
+        }
+    }
+
+    return -1
+}
+
+function Remove-AddProjectRow {
+    param([System.Windows.Forms.DataGridView]$Grid)
+
+    $addProjectRowIndex = Get-AddProjectRowIndex -Grid $Grid
+    if ($addProjectRowIndex -lt 0) {
+        return $false
+    }
+
+    $Grid.Rows.RemoveAt($addProjectRowIndex)
+    return $true
+}
+
+function Add-AddProjectRow {
+    param([System.Windows.Forms.DataGridView]$Grid)
+
+    if ($null -eq $Grid -or $Grid.IsDisposed) {
+        return
+    }
+
+    $null = Remove-AddProjectRow -Grid $Grid
+    $rowIndex = $Grid.Rows.Add('', '', '', $true)
+    $row = $Grid.Rows[$rowIndex]
+    $rowBackColor = [System.Drawing.ColorTranslator]::FromHtml('#F4F6F8')
+    $accentColor = [System.Drawing.ColorTranslator]::FromHtml('#2E7D32')
+
+    foreach ($cell in $row.Cells) {
+        $cell.ReadOnly = $true
+        if ($cell -is [System.Windows.Forms.DataGridViewButtonCell]) {
+            $cell.UseColumnTextForButtonValue = $false
+            $cell.Value = ''
+            if ($cell.OwningColumn.Name -ne 'X') {
+                $cell.Style.BackColor = $rowBackColor
+                $cell.Style.ForeColor = $rowBackColor
+                $cell.Style.SelectionBackColor = $rowBackColor
+                $cell.Style.SelectionForeColor = $rowBackColor
+            }
+        }
+    }
+
+    $row.Cells['Name'].Value = 'Add Project...'
+    $row.Cells['X'].ReadOnly = $false
+    $row.Cells['X'].Value = '+'
+
+    $row.DefaultCellStyle.BackColor = $rowBackColor
+    $row.DefaultCellStyle.SelectionBackColor = $rowBackColor
+    $row.Cells['Name'].Style.ForeColor = [System.Drawing.Color]::FromArgb(35, 45, 55)
+    $row.Cells['Name'].Style.SelectionForeColor = [System.Drawing.Color]::FromArgb(35, 45, 55)
+
+    $row.Cells['X'].Style.BackColor = $accentColor
+    $row.Cells['X'].Style.ForeColor = [System.Drawing.Color]::White
+    $row.Cells['X'].Style.SelectionBackColor = $accentColor
+    $row.Cells['X'].Style.SelectionForeColor = [System.Drawing.Color]::White
+}
+
+function Add-ProjectEntryRow {
+    param(
+        [System.Windows.Forms.DataGridView]$Grid,
+        [object]$Entry
+    )
+
+    if ($null -eq $Grid -or $Grid.IsDisposed -or $null -eq $Entry) {
+        return
+    }
+
+    $hadAddProjectRow = Remove-AddProjectRow -Grid $Grid
+    $rowIndex = $Grid.Rows.Add($Entry.Name, $Entry.Path, $Entry.CmdColor, $false)
+    Set-ScriptButtonCellValues -Row $Grid.Rows[$rowIndex] -Directory $Entry.Path -CmdColor $Entry.CmdColor
+
+    if ($hadAddProjectRow) {
+        Add-AddProjectRow -Grid $Grid
+    }
 }
 
 function Get-UniqueDirectoryEntriesFromGrid {
@@ -1090,6 +1198,10 @@ function Get-UniqueDirectoryEntriesFromGrid {
 
     foreach ($row in $Grid.Rows) {
         if ($row.IsNewRow) {
+            continue
+        }
+
+        if (Test-IsAddProjectRow -Row $row) {
             continue
         }
 
@@ -1127,6 +1239,133 @@ function Save-GridConfigToFile {
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to save config '$Path'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
         return $null
+    }
+}
+
+function Show-ProjectAddCellDialog {
+    param(
+        [System.Windows.Forms.DataGridView]$Grid,
+        [string]$ConfigPath,
+        [string]$AgentCmd,
+        [string]$TenxExe,
+        [string]$FilePilotExe,
+        [string]$DiffExe
+    )
+
+    if ($null -eq $Grid -or $Grid.IsDisposed) {
+        return
+    }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = 'Add Project'
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialog.MinimizeBox = $false
+    $dialog.MaximizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.ClientSize = New-Object System.Drawing.Size(520, 128)
+
+    $lblPath = New-Object System.Windows.Forms.Label
+    $lblPath.Text = 'Path'
+    $lblPath.AutoSize = $true
+    $lblPath.Location = New-Object System.Drawing.Point(12, 16)
+    $dialog.Controls.Add($lblPath)
+
+    $txtPath = New-Object System.Windows.Forms.TextBox
+    $txtPath.Width = 330
+    $txtPath.Location = New-Object System.Drawing.Point(72, 12)
+    $dialog.Controls.Add($txtPath)
+
+    $btnBrowse = New-Object System.Windows.Forms.Button
+    $btnBrowse.Text = 'Browse...'
+    $btnBrowse.Width = 90
+    $btnBrowse.Location = New-Object System.Drawing.Point(412, 10)
+    $dialog.Controls.Add($btnBrowse)
+
+    $lblName = New-Object System.Windows.Forms.Label
+    $lblName.Text = 'Name'
+    $lblName.AutoSize = $true
+    $lblName.Location = New-Object System.Drawing.Point(12, 52)
+    $dialog.Controls.Add($lblName)
+
+    $txtName = New-Object System.Windows.Forms.TextBox
+    $txtName.Width = 430
+    $txtName.Location = New-Object System.Drawing.Point(72, 48)
+    $dialog.Controls.Add($txtName)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = 'Cancel'
+    $btnCancel.Width = 90
+    $btnCancel.Location = New-Object System.Drawing.Point(286, 86)
+    $btnCancel.Add_Click({
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $dialog.Close()
+    })
+    $dialog.Controls.Add($btnCancel)
+
+    $btnAdd = New-Object System.Windows.Forms.Button
+    $btnAdd.Text = 'Add Project'
+    $btnAdd.Width = 130
+    $btnAdd.Location = New-Object System.Drawing.Point(380, 86)
+    $dialog.Controls.Add($btnAdd)
+
+    $btnBrowse.Add_Click({
+        $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $folderDialog.Description = 'Select a project directory'
+        if ($folderDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+            return
+        }
+
+        $txtPath.Text = $folderDialog.SelectedPath
+        if ([string]::IsNullOrWhiteSpace($txtName.Text)) {
+            $txtName.Text = Get-DirectoryNameFromPath -Path $folderDialog.SelectedPath
+        }
+    })
+
+    $btnAdd.Add_Click({
+        $path = $txtPath.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            [System.Windows.Forms.MessageBox]::Show('Select a project path.', 'ai_mux', 'OK', 'Warning') | Out-Null
+            return
+        }
+
+        if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+            [System.Windows.Forms.MessageBox]::Show("Directory not found: $path", 'ai_mux', 'OK', 'Error') | Out-Null
+            return
+        }
+
+        $entry = New-DirectoryEntry -Name $txtName.Text -Path $path -CmdColor ''
+        if ($null -eq $entry) {
+            return
+        }
+
+        foreach ($existingEntry in (Get-UniqueDirectoryEntriesFromGrid -Grid $Grid)) {
+            if ([string]::Equals(([string]$existingEntry.Path).Trim(), $entry.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
+                [System.Windows.Forms.MessageBox]::Show("Project already exists: $($entry.Path)", 'ai_mux', 'OK', 'Information') | Out-Null
+                return
+            }
+        }
+
+        Add-ProjectEntryRow -Grid $Grid -Entry $entry
+        $savedDirectories = Save-GridConfigToFile -Path $ConfigPath -Grid $Grid -AgentCmd $AgentCmd -TenxExe $TenxExe -FilePilotExe $FilePilotExe -DiffExe $DiffExe
+        if ($null -eq $savedDirectories) {
+            return
+        }
+
+        Start-DirtyStatusRefreshForGrid -Grid $Grid
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $dialog.Close()
+    })
+
+    $dialog.AcceptButton = $btnAdd
+    $dialog.CancelButton = $btnCancel
+
+    $owner = $Grid.FindForm()
+    if ($null -ne $owner) {
+        [void]$dialog.ShowDialog($owner)
+    }
+    else {
+        [void]$dialog.ShowDialog()
     }
 }
 
@@ -1370,6 +1609,43 @@ function Resize-TopPanelToContent {
     }
 }
 
+function Resize-FormHeightToFitGridRows {
+    param(
+        [System.Windows.Forms.Form]$Form,
+        [System.Windows.Forms.DataGridView]$Grid
+    )
+
+    if ($null -eq $Form -or $Form.IsDisposed -or $null -eq $Grid -or $Grid.IsDisposed) {
+        return
+    }
+
+    $rowHeights = $Grid.Rows.GetRowsHeight([System.Windows.Forms.DataGridViewElementStates]::Visible)
+    $headerHeight = if ($Grid.ColumnHeadersVisible) { $Grid.ColumnHeadersHeight } else { 0 }
+    $desiredGridHeight = $rowHeights + $headerHeight + 2
+    if ($desiredGridHeight -lt 120) {
+        $desiredGridHeight = 120
+    }
+
+    $currentGridHeight = $Grid.ClientSize.Height
+    if ($currentGridHeight -le 0) {
+        return
+    }
+
+    $targetFormHeight = $Form.Height + ($desiredGridHeight - $currentGridHeight)
+    $minimumHeight = if ($Form.MinimumSize.Height -gt 0) { $Form.MinimumSize.Height } else { 220 }
+    if ($targetFormHeight -lt $minimumHeight) {
+        $targetFormHeight = $minimumHeight
+    }
+
+    $workingArea = [System.Windows.Forms.Screen]::FromControl($Form).WorkingArea
+    $maxHeight = [Math]::Max($minimumHeight, $workingArea.Height - 20)
+    if ($targetFormHeight -gt $maxHeight) {
+        $targetFormHeight = $maxHeight
+    }
+
+    $Form.Height = [int]$targetFormHeight
+}
+
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ai_mux'
 $form.Width = 550
@@ -1490,7 +1766,7 @@ $btnSave.Location = New-Object System.Drawing.Point(348, 8)
 $topPanel.Controls.Add($btnSave)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = 'Rows show one directory each by name. Click o for color options or remove.'
+$hint.Text = 'Rows show one directory each by name. Click o for options or + to add.'
 $hint.AutoSize = $true
 $hint.Location = New-Object System.Drawing.Point(670, 76)
 $topPanel.Controls.Add($hint)
@@ -1511,6 +1787,7 @@ $split.Panel2.Controls.Add($grid)
 Resize-TopPanelToContent -Panel $topPanel -Split $split
 $form.Add_Shown({
     Resize-TopPanelToContent -Panel $topPanel -Split $split
+    Resize-FormHeightToFitGridRows -Form $form -Grid $grid
     Start-DirtyStatusRefreshForGrid -Grid $grid
 })
 $form.Add_Resize({
@@ -1539,6 +1816,12 @@ $colCmdColor.Name = 'CmdColor'
 $colCmdColor.HeaderText = 'CmdColor'
 $colCmdColor.Visible = $false
 $grid.Columns.Add($colCmdColor) | Out-Null
+
+$colIsAddRow = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colIsAddRow.Name = 'IsAddRow'
+$colIsAddRow.HeaderText = 'IsAddRow'
+$colIsAddRow.Visible = $false
+$grid.Columns.Add($colIsAddRow) | Out-Null
 
 $colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colName.Name = 'Name'
@@ -1576,7 +1859,7 @@ $gridButtonColors = @{
 
 foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
-    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'dbg' } else { $name }
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } else { $name }
     $col.Name = $name
     $col.HeaderText = if ($name -eq 'X') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
     $col.Text = $displayName
@@ -1644,6 +1927,10 @@ function Invoke-GitCommitFromRow {
         return
     }
 
+    if (Test-IsAddProjectRow -Row $Grid.Rows[$RowIndex]) {
+        return
+    }
+
     $directory = [string]$Grid.Rows[$RowIndex].Cells['Directory'].Value
     if ([string]::IsNullOrWhiteSpace($directory)) {
         return
@@ -1675,6 +1962,10 @@ function Start-GitPullForAllRows {
     $directories = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($row in $Grid.Rows) {
         if ($row.IsNewRow) {
+            continue
+        }
+
+        if (Test-IsAddProjectRow -Row $row) {
             continue
         }
 
@@ -1717,9 +2008,10 @@ function Refresh-Grid {
             continue
         }
 
-        $rowIndex = $Grid.Rows.Add($normalized.Name, $normalized.Path, $normalized.CmdColor)
-        Set-ScriptButtonCellValues -Row $Grid.Rows[$rowIndex] -Directory $normalized.Path -CmdColor $normalized.CmdColor
+        Add-ProjectEntryRow -Grid $Grid -Entry $normalized
     }
+
+    Add-AddProjectRow -Grid $Grid
 }
 
 function Load-IntoUi {
@@ -1773,8 +2065,7 @@ $btnAddDir.Add_Click({
             return
         }
 
-        $rowIndex = $grid.Rows.Add($entry.Name, $entry.Path, $entry.CmdColor)
-        Set-ScriptButtonCellValues -Row $grid.Rows[$rowIndex] -Directory $entry.Path -CmdColor $entry.CmdColor
+        Add-ProjectEntryRow -Grid $grid -Entry $entry
     }
 })
 
@@ -1817,8 +2108,25 @@ $grid.Add_CellContentClick({
     }
 
     $columnName = $grid.Columns[$e.ColumnIndex].Name
-    $directory = [string]$grid.Rows[$e.RowIndex].Cells['Directory'].Value
-    $cmdColor = if ($grid.Columns.Contains('CmdColor')) { [string]$grid.Rows[$e.RowIndex].Cells['CmdColor'].Value } else { '' }
+    $row = $grid.Rows[$e.RowIndex]
+    $isAddProjectRow = Test-IsAddProjectRow -Row $row
+
+    if ($columnName -eq 'X') {
+        if ($isAddProjectRow) {
+            Show-ProjectAddCellDialog -Grid $grid -ConfigPath $ConfigPath -AgentCmd $txtAgent.Text.Trim() -TenxExe $txtTenx.Text.Trim() -FilePilotExe $txtFilePilot.Text.Trim() -DiffExe $txtDiff.Text.Trim()
+            return
+        }
+
+        Show-ProjectDeleteCellDialog -Grid $grid -RowIndex $e.RowIndex -ConfigPath $ConfigPath -AgentCmd $txtAgent.Text.Trim() -TenxExe $txtTenx.Text.Trim() -FilePilotExe $txtFilePilot.Text.Trim() -DiffExe $txtDiff.Text.Trim()
+        return
+    }
+
+    if ($isAddProjectRow) {
+        return
+    }
+
+    $directory = [string]$row.Cells['Directory'].Value
+    $cmdColor = if ($grid.Columns.Contains('CmdColor')) { [string]$row.Cells['CmdColor'].Value } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($directory)) {
         return
@@ -1867,9 +2175,6 @@ $grid.Add_CellContentClick({
         }
         'Folder' {
             Open-FolderInFilePilot -Directory $directory -FilePilotExe $txtFilePilot.Text
-        }
-        'X' {
-            Show-ProjectDeleteCellDialog -Grid $grid -RowIndex $e.RowIndex -ConfigPath $ConfigPath -AgentCmd $txtAgent.Text.Trim() -TenxExe $txtTenx.Text.Trim() -FilePilotExe $txtFilePilot.Text.Trim() -DiffExe $txtDiff.Text.Trim()
         }
     }
 })
