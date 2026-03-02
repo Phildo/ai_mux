@@ -720,6 +720,12 @@ function Get-BuildReleaseBatPath {
     return Get-BatPath -Directory $Directory -FileName 'buildrelease.bat'
 }
 
+function Get-DebugBatPath {
+    param([string]$Directory)
+
+    return Get-BatPath -Directory $Directory -FileName 'debug.bat'
+}
+
 function Start-RunBatInDirectory {
     param([string]$Directory)
 
@@ -739,6 +745,28 @@ function Start-RunBatInDirectory {
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to run '$runBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+    }
+}
+
+function Start-DebugBatInDirectory {
+    param([string]$Directory)
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        return
+    }
+
+    $debugBatPath = Get-DebugBatPath -Directory $Directory
+    if ([string]::IsNullOrWhiteSpace($debugBatPath)) {
+        [System.Windows.Forms.MessageBox]::Show("debug.bat not found in: $Directory", 'ai_mux', 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    try {
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"`"$debugBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to run '$debugBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
     }
 }
 
@@ -787,6 +815,7 @@ function Set-ScriptButtonCellValues {
     }
 
     $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Exe' } else { '' }
+    $Row.Cells['Dbg'].Value = if (Get-DebugBatPath -Directory $Directory) { 'dbg' } else { '' }
     $Row.Cells['Release'].Value = 'Build'
     Set-DirtyCellState -Row $Row -State 'Unknown'
 }
@@ -1044,19 +1073,20 @@ $gridButtonColors = @{
     'Pull' = '#1565C0'
     'Dirty' = '#9E9E9E'
     'Exe' = '#EF6C00'
+    'Dbg' = '#6A1B9A'
     'Release' = '#8B0000'
     'Cmd' = '#000000'
     'Folder' = '#F3E5AB'
     'X' = '#C62828'
 }
 
-foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Release', 'Cmd', 'Folder', 'X')) {
+foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
-    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'x' } elseif ($name -eq 'Dirty') { '?' } else { $name }
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'x' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'dbg' } else { $name }
     $col.Name = $name
     $col.HeaderText = if ($name -eq 'X') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
     $col.Text = $displayName
-    $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Release')
+    $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Dbg' -and $name -ne 'Release')
     if ($name -eq 'X') {
         $col.Width = 30
     }
@@ -1094,8 +1124,9 @@ $grid.Columns['Message'].DisplayIndex = 6
 $grid.Columns['Pull'].DisplayIndex = 7
 $grid.Columns['Release'].DisplayIndex = 8
 $grid.Columns['Exe'].DisplayIndex = 9
-$grid.Columns['Cmd'].DisplayIndex = 10
-$grid.Columns['Folder'].DisplayIndex = 11
+$grid.Columns['Dbg'].DisplayIndex = 10
+$grid.Columns['Cmd'].DisplayIndex = 11
+$grid.Columns['Folder'].DisplayIndex = 12
 $dirtyHeaderColor = [System.Drawing.ColorTranslator]::FromHtml('#9E9E9E')
 $grid.Columns['Dirty'].HeaderCell.Style.BackColor = $dirtyHeaderColor
 $grid.Columns['Dirty'].HeaderCell.Style.ForeColor = [System.Drawing.Color]::White
@@ -1320,6 +1351,9 @@ $grid.Add_CellContentClick({
         }
         'Exe' {
             Start-RunBatInDirectory -Directory $directory
+        }
+        'Dbg' {
+            Start-DebugBatInDirectory -Directory $directory
         }
         'Release' {
             Start-BuildReleaseBatInDirectory -Directory $directory
