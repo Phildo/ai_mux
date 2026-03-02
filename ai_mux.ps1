@@ -274,6 +274,10 @@ function Get-ReadableTextColor {
     return [System.Drawing.Color]::White
 }
 
+function Get-CmdColorDigits {
+    return @('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F')
+}
+
 function New-DirectoryEntry {
     param(
         [string]$Name,
@@ -1105,6 +1109,231 @@ function Get-UniqueDirectoryEntriesFromGrid {
     return $result.ToArray()
 }
 
+function Save-GridConfigToFile {
+    param(
+        [string]$Path,
+        [System.Windows.Forms.DataGridView]$Grid,
+        [string]$AgentCmd,
+        [string]$TenxExe,
+        [string]$FilePilotExe,
+        [string]$DiffExe
+    )
+
+    try {
+        $directories = Get-UniqueDirectoryEntriesFromGrid -Grid $Grid
+        Save-Config -Path $Path -AgentCmd $AgentCmd -TenxExe $TenxExe -FilePilotExe $FilePilotExe -DiffExe $DiffExe -Directories $directories
+        return $directories
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to save config '$Path'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        return $null
+    }
+}
+
+function Show-ProjectDeleteCellDialog {
+    param(
+        [System.Windows.Forms.DataGridView]$Grid,
+        [int]$RowIndex,
+        [string]$ConfigPath,
+        [string]$AgentCmd,
+        [string]$TenxExe,
+        [string]$FilePilotExe,
+        [string]$DiffExe
+    )
+
+    if ($null -eq $Grid -or $Grid.IsDisposed -or $RowIndex -lt 0 -or $RowIndex -ge $Grid.Rows.Count) {
+        return
+    }
+
+    $row = $Grid.Rows[$RowIndex]
+    if ($null -eq $row -or $row.IsNewRow) {
+        return
+    }
+
+    $directory = [string]$row.Cells['Directory'].Value
+    if ([string]::IsNullOrWhiteSpace($directory)) {
+        return
+    }
+
+    $directory = $directory.Trim()
+    $projectName = [string]$row.Cells['Name'].Value
+    if ([string]::IsNullOrWhiteSpace($projectName)) {
+        $projectName = Get-DirectoryNameFromPath -Path $directory
+    }
+
+    $currentCmdColor = if ($Grid.Columns.Contains('CmdColor')) { [string]$row.Cells['CmdColor'].Value } else { '' }
+    $resolved = Resolve-CmdColorCode -Directory $directory -ColorCode $currentCmdColor
+    $state = @{
+        Bg = $resolved.Substring(0, 1)
+        Text = $resolved.Substring(1, 1)
+    }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Project: $projectName"
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialog.MinimizeBox = $false
+    $dialog.MaximizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.AutoSize = $true
+    $dialog.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $dialog.Padding = New-Object System.Windows.Forms.Padding(10)
+
+    $table = New-Object System.Windows.Forms.TableLayoutPanel
+    $table.AutoSize = $true
+    $table.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $table.ColumnCount = 2
+    $table.RowCount = 3
+    $table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $table.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $dialog.Controls.Add($table)
+
+    $lblBg = New-Object System.Windows.Forms.Label
+    $lblBg.Text = 'bg color'
+    $lblBg.AutoSize = $true
+    $lblBg.Margin = New-Object System.Windows.Forms.Padding(0, 7, 8, 4)
+    $table.Controls.Add($lblBg, 0, 0)
+
+    $flowBg = New-Object System.Windows.Forms.FlowLayoutPanel
+    $flowBg.AutoSize = $true
+    $flowBg.WrapContents = $true
+    $flowBg.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+    $table.Controls.Add($flowBg, 1, 0)
+
+    $lblText = New-Object System.Windows.Forms.Label
+    $lblText.Text = 'text color'
+    $lblText.AutoSize = $true
+    $lblText.Margin = New-Object System.Windows.Forms.Padding(0, 7, 8, 4)
+    $table.Controls.Add($lblText, 0, 1)
+
+    $flowText = New-Object System.Windows.Forms.FlowLayoutPanel
+    $flowText.AutoSize = $true
+    $flowText.WrapContents = $true
+    $flowText.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+    $table.Controls.Add($flowText, 1, 1)
+
+    $lblRemove = New-Object System.Windows.Forms.Label
+    $lblRemove.Text = 'remove'
+    $lblRemove.AutoSize = $true
+    $lblRemove.Margin = New-Object System.Windows.Forms.Padding(0, 7, 8, 0)
+    $table.Controls.Add($lblRemove, 0, 2)
+
+    $removePanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $removePanel.AutoSize = $true
+    $removePanel.WrapContents = $false
+    $table.Controls.Add($removePanel, 1, 2)
+
+    $btnRemove = New-Object System.Windows.Forms.Button
+    $btnRemove.Text = 'Remove Project'
+    $btnRemove.Width = 130
+    $btnRemove.Height = 28
+    $btnRemove.BackColor = [System.Drawing.Color]::FromArgb(198, 40, 40)
+    $btnRemove.ForeColor = [System.Drawing.Color]::White
+    $btnRemove.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $removePanel.Controls.Add($btnRemove)
+
+    $bgButtons = New-Object 'System.Collections.Generic.List[System.Windows.Forms.Button]'
+    $textButtons = New-Object 'System.Collections.Generic.List[System.Windows.Forms.Button]'
+
+    $persistConfig = {
+        $null = Save-GridConfigToFile -Path $ConfigPath -Grid $Grid -AgentCmd $AgentCmd -TenxExe $TenxExe -FilePilotExe $FilePilotExe -DiffExe $DiffExe
+    }
+
+    $applyCmdColor = {
+        if ($row.Index -lt 0) {
+            $dialog.Close()
+            return
+        }
+
+        $newCmdColor = Resolve-CmdColorCode -Directory $directory -BackgroundColor ([string]$state.Bg) -TextColor ([string]$state.Text)
+        $state.Bg = $newCmdColor.Substring(0, 1)
+        $state.Text = $newCmdColor.Substring(1, 1)
+
+        if ($Grid.Columns.Contains('CmdColor')) {
+            $row.Cells['CmdColor'].Value = $newCmdColor
+        }
+
+        Set-XCellColorFromCmdColor -Row $row -CmdColor $newCmdColor
+        & $persistConfig
+    }
+
+    $refreshColorButtons = {
+        $selectedTextPreview = Get-ConsoleColorFromHexDigit -HexDigit ([string]$state.Text)[0]
+        foreach ($btn in $bgButtons) {
+            $digit = [string]$btn.Tag
+            $backgroundColor = Get-ConsoleColorFromHexDigit -HexDigit $digit[0]
+            $btn.BackColor = $backgroundColor
+            $btn.ForeColor = $selectedTextPreview
+            $btn.FlatAppearance.BorderSize = if ($digit -eq [string]$state.Bg) { 3 } else { 1 }
+        }
+
+        $selectedBackground = Get-ConsoleColorFromHexDigit -HexDigit ([string]$state.Bg)[0]
+        foreach ($btn in $textButtons) {
+            $digit = [string]$btn.Tag
+            $foregroundColor = Get-ConsoleColorFromHexDigit -HexDigit $digit[0]
+            if ($selectedBackground.ToArgb() -eq $foregroundColor.ToArgb()) {
+                $foregroundColor = Get-ReadableTextColor -BackgroundColor $selectedBackground
+            }
+
+            $btn.BackColor = $selectedBackground
+            $btn.ForeColor = $foregroundColor
+            $btn.FlatAppearance.BorderSize = if ($digit -eq [string]$state.Text) { 3 } else { 1 }
+        }
+    }
+
+    foreach ($digit in Get-CmdColorDigits) {
+        $btnBg = New-Object System.Windows.Forms.Button
+        $btnBg.Text = $digit
+        $btnBg.Tag = $digit
+        $btnBg.Width = 28
+        $btnBg.Height = 28
+        $btnBg.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnBg.FlatAppearance.BorderColor = [System.Drawing.Color]::Black
+        $btnBg.Margin = New-Object System.Windows.Forms.Padding(1)
+        $btnBg.Add_Click({
+            $state.Bg = [string]$this.Tag
+            & $applyCmdColor
+            & $refreshColorButtons
+        })
+        $flowBg.Controls.Add($btnBg)
+        $bgButtons.Add($btnBg) | Out-Null
+
+        $btnText = New-Object System.Windows.Forms.Button
+        $btnText.Text = $digit
+        $btnText.Tag = $digit
+        $btnText.Width = 28
+        $btnText.Height = 28
+        $btnText.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $btnText.FlatAppearance.BorderColor = [System.Drawing.Color]::Black
+        $btnText.Margin = New-Object System.Windows.Forms.Padding(1)
+        $btnText.Add_Click({
+            $state.Text = [string]$this.Tag
+            & $applyCmdColor
+            & $refreshColorButtons
+        })
+        $flowText.Controls.Add($btnText)
+        $textButtons.Add($btnText) | Out-Null
+    }
+
+    $btnRemove.Add_Click({
+        if ($row.Index -ge 0) {
+            $Grid.Rows.Remove($row)
+            & $persistConfig
+        }
+
+        $dialog.Close()
+    })
+
+    & $refreshColorButtons
+    $owner = $Grid.FindForm()
+    if ($null -ne $owner) {
+        [void]$dialog.ShowDialog($owner)
+    }
+    else {
+        [void]$dialog.ShowDialog()
+    }
+}
+
 function Resize-TopPanelToContent {
     param(
         [System.Windows.Forms.Panel]$Panel,
@@ -1261,7 +1490,7 @@ $btnSave.Location = New-Object System.Drawing.Point(348, 8)
 $topPanel.Controls.Add($btnSave)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = 'Rows show one directory each by name. Click x to delete a row.'
+$hint.Text = 'Rows show one directory each by name. Click o for color options or remove.'
 $hint.AutoSize = $true
 $hint.Location = New-Object System.Drawing.Point(670, 76)
 $topPanel.Controls.Add($hint)
@@ -1347,13 +1576,13 @@ $gridButtonColors = @{
 
 foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
-    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'x' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'dbg' } else { $name }
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'dbg' } else { $name }
     $col.Name = $name
     $col.HeaderText = if ($name -eq 'X') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
     $col.Text = $displayName
     $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Dbg' -and $name -ne 'Release')
     if ($name -eq 'X') {
-        $col.Width = 30
+        $col.Width = 15
     }
     elseif ($name -eq 'Folder') {
         $col.Width = 40
@@ -1478,7 +1707,10 @@ function Refresh-Grid {
             $normalized = New-DirectoryEntry -Name '' -Path $entry
         }
         else {
-            $normalized = New-DirectoryEntry -Name ([string]$entry.Name) -Path ([string]$entry.Path)
+            $entryCmdBgColor = if ($entry.PSObject.Properties['CmdBgColor']) { [string]$entry.CmdBgColor } else { '' }
+            $entryCmdTextColor = if ($entry.PSObject.Properties['CmdTextColor']) { [string]$entry.CmdTextColor } else { '' }
+            $entryCmdColor = if ($entry.PSObject.Properties['CmdColor']) { [string]$entry.CmdColor } else { '' }
+            $normalized = New-DirectoryEntry -Name ([string]$entry.Name) -Path ([string]$entry.Path) -CmdBgColor $entryCmdBgColor -CmdTextColor $entryCmdTextColor -CmdColor $entryCmdColor
         }
 
         if ($null -eq $normalized) {
@@ -1551,8 +1783,11 @@ $btnReload.Add_Click({
 })
 
 $btnSave.Add_Click({
-    $directories = Get-UniqueDirectoryEntriesFromGrid -Grid $grid
-    Save-Config -Path $ConfigPath -AgentCmd $txtAgent.Text.Trim() -TenxExe $txtTenx.Text.Trim() -FilePilotExe $txtFilePilot.Text.Trim() -DiffExe $txtDiff.Text.Trim() -Directories $directories
+    $directories = Save-GridConfigToFile -Path $ConfigPath -Grid $grid -AgentCmd $txtAgent.Text.Trim() -TenxExe $txtTenx.Text.Trim() -FilePilotExe $txtFilePilot.Text.Trim() -DiffExe $txtDiff.Text.Trim()
+    if ($null -eq $directories) {
+        return
+    }
+
     Refresh-Grid -Grid $grid -Directories $directories
     [System.Windows.Forms.MessageBox]::Show("Saved: $ConfigPath", 'ai_mux') | Out-Null
 })
@@ -1634,7 +1869,7 @@ $grid.Add_CellContentClick({
             Open-FolderInFilePilot -Directory $directory -FilePilotExe $txtFilePilot.Text
         }
         'X' {
-            $grid.Rows.RemoveAt($e.RowIndex)
+            Show-ProjectDeleteCellDialog -Grid $grid -RowIndex $e.RowIndex -ConfigPath $ConfigPath -AgentCmd $txtAgent.Text.Trim() -TenxExe $txtTenx.Text.Trim() -FilePilotExe $txtFilePilot.Text.Trim() -DiffExe $txtDiff.Text.Trim()
         }
     }
 })

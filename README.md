@@ -40,7 +40,8 @@ repo2,D:\work\repo2,1,E
 
 - `AI`: opens `cmd` in that directory and runs `AGENT_CMD`.
 - All launched `cmd` windows are auto-labeled as `<project-folder>` and use each row's configured per-project cmd color.
-- The `x` button for each row is colored from that same cmd color so the row color matches the launched terminal color.
+- Clicking `o` opens a per-project dialog with `bg color`, `text color`, and `remove`; color changes and remove are saved to `config.txt` immediately.
+- The `o` button for each row is colored from that same cmd background/text combination so the row color matches the launched terminal color.
 - `10x`: finds first `*.10x` recursively and opens it in 10x; if none, opens the directory in 10x.
 - `Push` cell: type a commit message and press `Enter` to run `git add . && git commit -m "<message>" && git push`.
 - `Pull`: runs `git pull` in that folder; click the `Pull` column header to run pull for all rows.
@@ -51,6 +52,6 @@ repo2,D:\work\repo2,1,E
 - `Cmd`: opens plain `cmd` in that directory.
 - `Folder`: opens that directory using `FILEPILOT_EXE`.
 
-Use `Add Folder` and `x` in the UI, then `Save Config`.
+Use `Add Folder` and `o` in the UI, then `Save Config`.
 
 
