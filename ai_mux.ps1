@@ -502,7 +502,7 @@ function Get-CmdPrefixCommands {
 
     $decorators = Get-CmdWindowDecorators -Directory $Directory -CmdColor $CmdColor
     $safeTitle = Escape-ForCmdCommandLiteral -Value ([string]$decorators.Title)
-    return "title $safeTitle && color $($decorators.Color)"
+    return "title $safeTitle & color $($decorators.Color)"
 }
 
 function Start-CmdInDirectory {
@@ -518,7 +518,7 @@ function Start-CmdInDirectory {
     }
 
     $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
-    $args = "/K $prefix && cd /d `"$Directory`""
+    $args = "/K $prefix & cd /d `"$Directory`""
     if (-not [string]::IsNullOrWhiteSpace($Command)) {
         $args += " && $Command"
     }
@@ -548,7 +548,7 @@ function Start-GitCommitInDirectory {
 
     try {
         $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && $command" -WorkingDirectory $Directory | Out-Null
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix & $command" -WorkingDirectory $Directory | Out-Null
         return $true
     }
     catch {
@@ -570,7 +570,7 @@ function Start-GitPullInDirectory {
 
     try {
         $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && git pull" -WorkingDirectory $Directory | Out-Null
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix & git pull" -WorkingDirectory $Directory | Out-Null
         return $true
     }
     catch {
@@ -960,8 +960,8 @@ function Start-RunBatInDirectory {
     }
 
     try {
-        $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && call `"`"$runBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+        # Launch run.bat directly (shell execution), matching double-click behavior.
+        Start-Process -FilePath $runBatPath -WorkingDirectory $Directory | Out-Null
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to run '$runBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
@@ -987,7 +987,7 @@ function Start-DebugBatInDirectory {
 
     try {
         $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && call `"`"$debugBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix & call `"`"$debugBatPath`"`"" -WorkingDirectory $Directory | Out-Null
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to run '$debugBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
@@ -1021,7 +1021,7 @@ function Start-BuildReleaseBatInDirectory {
         }
 
         $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
-        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix && $command" -WorkingDirectory $Directory | Out-Null
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix & $command" -WorkingDirectory $Directory | Out-Null
 
         if ([string]::IsNullOrWhiteSpace($runBatPath)) {
             [System.Windows.Forms.MessageBox]::Show("run.bat not found in: $Directory`r`nExecuted build.bat only.", 'ai_mux', 'OK', 'Warning') | Out-Null
@@ -1072,7 +1072,7 @@ function Set-ScriptButtonCellValues {
         return
     }
 
-    $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Exe' } else { '' }
+    $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Run' } else { '' }
     $Row.Cells['Dbg'].Value = if (Get-DebugBatPath -Directory $Directory) { 'Dbg' } else { '' }
     $Row.Cells['Release'].Value = if (Get-BuildReleaseBatPath -Directory $Directory) { 'Build' } else { '' }
     if ($Row.DataGridView.Columns.Contains('CmdColor')) {
@@ -1309,9 +1309,15 @@ function Show-ProjectAddCellDialog {
     $btnAdd.Location = New-Object System.Drawing.Point(380, 86)
     $dialog.Controls.Add($btnAdd)
 
+    $btnNewProject = New-Object System.Windows.Forms.Button
+    $btnNewProject.Text = 'New Project'
+    $btnNewProject.Width = 130
+    $btnNewProject.Location = New-Object System.Drawing.Point(152, 86)
+    $dialog.Controls.Add($btnNewProject)
+
     $btnBrowse.Add_Click({
         $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
-        $folderDialog.Description = 'Select a project directory'
+        $folderDialog.Description = 'Select a project directory or parent location'
         if ($folderDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
             return
         }
@@ -1321,6 +1327,34 @@ function Show-ProjectAddCellDialog {
             $txtName.Text = Get-DirectoryNameFromPath -Path $folderDialog.SelectedPath
         }
     })
+
+    $tryAddProjectEntry = {
+        param(
+            [string]$EntryName,
+            [string]$EntryPath
+        )
+
+        $entry = New-DirectoryEntry -Name $EntryName -Path $EntryPath -CmdColor ''
+        if ($null -eq $entry) {
+            return $false
+        }
+
+        foreach ($existingEntry in (Get-UniqueDirectoryEntriesFromGrid -Grid $Grid)) {
+            if ([string]::Equals(([string]$existingEntry.Path).Trim(), $entry.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
+                [System.Windows.Forms.MessageBox]::Show("Project already exists: $($entry.Path)", 'ai_mux', 'OK', 'Information') | Out-Null
+                return $false
+            }
+        }
+
+        Add-ProjectEntryRow -Grid $Grid -Entry $entry
+        $savedDirectories = Save-GridConfigToFile -Path $ConfigPath -Grid $Grid -AgentCmd $AgentCmd -TenxExe $TenxExe -FilePilotExe $FilePilotExe -DiffExe $DiffExe
+        if ($null -eq $savedDirectories) {
+            return $false
+        }
+
+        Start-DirtyStatusRefreshForGrid -Grid $Grid
+        return $true
+    }
 
     $btnAdd.Add_Click({
         $path = $txtPath.Text.Trim()
@@ -1334,25 +1368,84 @@ function Show-ProjectAddCellDialog {
             return
         }
 
-        $entry = New-DirectoryEntry -Name $txtName.Text -Path $path -CmdColor ''
-        if ($null -eq $entry) {
+        if (-not (& $tryAddProjectEntry -EntryName $txtName.Text -EntryPath $path)) {
             return
         }
 
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $dialog.Close()
+    })
+
+    $btnNewProject.Add_Click({
+        $location = $txtPath.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($location)) {
+            [System.Windows.Forms.MessageBox]::Show('Select a parent location.', 'ai_mux', 'OK', 'Warning') | Out-Null
+            return
+        }
+
+        if (-not (Test-Path -LiteralPath $location -PathType Container)) {
+            [System.Windows.Forms.MessageBox]::Show("Directory not found: $location", 'ai_mux', 'OK', 'Error') | Out-Null
+            return
+        }
+
+        $folderName = $txtName.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($folderName)) {
+            [System.Windows.Forms.MessageBox]::Show('Enter a folder name for the new project.', 'ai_mux', 'OK', 'Warning') | Out-Null
+            return
+        }
+
+        if ($folderName -eq '.' -or $folderName -eq '..') {
+            [System.Windows.Forms.MessageBox]::Show('Folder name cannot be "." or "..".', 'ai_mux', 'OK', 'Warning') | Out-Null
+            return
+        }
+
+        if ($folderName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+            [System.Windows.Forms.MessageBox]::Show("Folder name contains invalid characters: $folderName", 'ai_mux', 'OK', 'Warning') | Out-Null
+            return
+        }
+
+        $newProjectPath = Join-Path -Path $location -ChildPath $folderName
         foreach ($existingEntry in (Get-UniqueDirectoryEntriesFromGrid -Grid $Grid)) {
-            if ([string]::Equals(([string]$existingEntry.Path).Trim(), $entry.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
-                [System.Windows.Forms.MessageBox]::Show("Project already exists: $($entry.Path)", 'ai_mux', 'OK', 'Information') | Out-Null
+            if ([string]::Equals(([string]$existingEntry.Path).Trim(), $newProjectPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                [System.Windows.Forms.MessageBox]::Show("Project already exists: $newProjectPath", 'ai_mux', 'OK', 'Information') | Out-Null
                 return
             }
         }
 
-        Add-ProjectEntryRow -Grid $Grid -Entry $entry
-        $savedDirectories = Save-GridConfigToFile -Path $ConfigPath -Grid $Grid -AgentCmd $AgentCmd -TenxExe $TenxExe -FilePilotExe $FilePilotExe -DiffExe $DiffExe
-        if ($null -eq $savedDirectories) {
+        if (Test-Path -LiteralPath $newProjectPath) {
+            [System.Windows.Forms.MessageBox]::Show("Path already exists: $newProjectPath", 'ai_mux', 'OK', 'Information') | Out-Null
             return
         }
 
-        Start-DirtyStatusRefreshForGrid -Grid $Grid
+        try {
+            New-Item -ItemType Directory -Path $newProjectPath | Out-Null
+        }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show("Failed to create directory '$newProjectPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+            return
+        }
+
+        try {
+            $gitInitOutput = & git -C $newProjectPath init 2>&1
+            $gitInitExitCode = $LASTEXITCODE
+            if ($gitInitExitCode -ne 0) {
+                $details = ($gitInitOutput | Out-String).Trim()
+                if ([string]::IsNullOrWhiteSpace($details)) {
+                    $details = 'Unknown git error.'
+                }
+
+                throw "git init failed with exit code $gitInitExitCode.`r`n$details"
+            }
+        }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show("Failed to initialize git repository in '$newProjectPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+            return
+        }
+
+        if (-not (& $tryAddProjectEntry -EntryName $folderName -EntryPath $newProjectPath)) {
+            return
+        }
+
         $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $dialog.Close()
     })
@@ -1859,7 +1952,7 @@ $gridButtonColors = @{
 
 foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
-    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } else { $name }
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'Exe') { 'Run' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } else { $name }
     $col.Name = $name
     $col.HeaderText = if ($name -eq 'X') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
     $col.Text = $displayName

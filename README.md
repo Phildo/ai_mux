@@ -47,11 +47,11 @@ repo2,D:\work\repo2,1,E
 - `Pull`: runs `git pull` in that folder; click the `Pull` column header to run pull for all rows.
 - `Diff`: opens the configured `DIFF_EXE` with that folder path as its argument.
 - `Dirty` (`?` button): auto-checks on load in the background, and you can click `?` to refresh manually with `git status --porcelain`; green means clean, red means dirty.
-- `Exe`: runs `run.bat` in that folder (button is blank when no `run.bat` is present).
+- `Run`: runs `run.bat` in that folder (button is blank when no `run.bat` is present).
 - `Build`: runs `buildrelease.bat` in that folder (`Build` button text).
 - `Cmd`: opens plain `cmd` in that directory.
 - `Folder`: opens that directory using `FILEPILOT_EXE`.
 
-Use `Add Folder` and `o` in the UI, then `Save Config`.
+Use `Add Folder` to open the add-project dialog, then either `Add Project` (existing folder) or `New Project` (create folder + `git init` + add row). Use `o` for per-project settings, then `Save Config`.
 
 
