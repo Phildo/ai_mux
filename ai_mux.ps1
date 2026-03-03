@@ -942,6 +942,63 @@ function Get-DebugBatPath {
     return Get-BatPath -Directory $Directory -FileName 'debug.bat'
 }
 
+function Get-TitleCardScriptPath {
+    return Join-Path -Path $PSScriptRoot -ChildPath 'tiny_windows.ps1'
+}
+
+function Start-TitleCardInDirectory {
+    param(
+        [string]$Directory,
+        [string]$ProjectName,
+        [string]$CmdColor = ''
+    )
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        return
+    }
+
+    $titleCardScript = Get-TitleCardScriptPath
+    if (-not (Test-Path -LiteralPath $titleCardScript -PathType Leaf)) {
+        [System.Windows.Forms.MessageBox]::Show("tiny_windows.ps1 not found: $titleCardScript", 'ai_mux', 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    $resolvedProjectName = if ([string]::IsNullOrWhiteSpace($ProjectName)) {
+        Get-DirectoryNameFromPath -Path $Directory
+    }
+    else {
+        $ProjectName.Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($resolvedProjectName)) {
+        $resolvedProjectName = 'titlecard'
+    }
+
+    $resolvedCmdColor = Resolve-CmdColorCode -Directory $Directory -ColorCode $CmdColor
+    $powerShellExe = Join-Path -Path $env:SystemRoot -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $powerShellExe -PathType Leaf)) {
+        $powerShellExe = 'powershell.exe'
+    }
+
+    try {
+        $launchArgs = @(
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-WindowStyle', 'Hidden',
+            '-STA',
+            '-File', $titleCardScript,
+            '-Titles', $resolvedProjectName,
+            '-CmdColor', $resolvedCmdColor
+        )
+
+        Start-Process -FilePath $powerShellExe -ArgumentList $launchArgs -WorkingDirectory $Directory -WindowStyle Hidden | Out-Null
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to launch titlecard for '$resolvedProjectName'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+    }
+}
+
 function Start-RunBatInDirectory {
     param(
         [string]$Directory,
@@ -1859,7 +1916,7 @@ $btnSave.Location = New-Object System.Drawing.Point(348, 8)
 $topPanel.Controls.Add($btnSave)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = 'Rows show one directory each by name. Click o for options or + to add.'
+$hint.Text = 'Rows show one directory each by name. Click o for options, t for titlecard, or + to add.'
 $hint.AutoSize = $true
 $hint.Location = New-Object System.Drawing.Point(670, 76)
 $topPanel.Controls.Add($hint)
@@ -1948,16 +2005,17 @@ $gridButtonColors = @{
     'Cmd' = '#000000'
     'Folder' = '#F3E5AB'
     'X' = '#C62828'
+    'T' = '#00695C'
 }
 
-foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X')) {
+foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
-    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'Exe') { 'Run' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } else { $name }
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'Exe') { 'Run' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'T') { 't' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } else { $name }
     $col.Name = $name
-    $col.HeaderText = if ($name -eq 'X') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
+    $col.HeaderText = if ($name -eq 'X' -or $name -eq 'T') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
     $col.Text = $displayName
     $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Dbg' -and $name -ne 'Release')
-    if ($name -eq 'X') {
+    if ($name -eq 'X' -or $name -eq 'T') {
         $col.Width = 15
     }
     elseif ($name -eq 'Folder') {
@@ -1985,18 +2043,19 @@ foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release
 }
 
 $grid.Columns['X'].DisplayIndex = 0
-$grid.Columns['Name'].DisplayIndex = 1
-$grid.Columns['AI'].DisplayIndex = 2
-$grid.Columns['10x'].DisplayIndex = 3
-$grid.Columns['Diff'].DisplayIndex = 4
-$grid.Columns['Dirty'].DisplayIndex = 5
-$grid.Columns['Message'].DisplayIndex = 6
-$grid.Columns['Pull'].DisplayIndex = 7
-$grid.Columns['Release'].DisplayIndex = 8
-$grid.Columns['Exe'].DisplayIndex = 9
-$grid.Columns['Dbg'].DisplayIndex = 10
-$grid.Columns['Cmd'].DisplayIndex = 11
-$grid.Columns['Folder'].DisplayIndex = 12
+$grid.Columns['T'].DisplayIndex = 1
+$grid.Columns['Name'].DisplayIndex = 2
+$grid.Columns['AI'].DisplayIndex = 3
+$grid.Columns['10x'].DisplayIndex = 4
+$grid.Columns['Diff'].DisplayIndex = 5
+$grid.Columns['Dirty'].DisplayIndex = 6
+$grid.Columns['Message'].DisplayIndex = 7
+$grid.Columns['Pull'].DisplayIndex = 8
+$grid.Columns['Release'].DisplayIndex = 9
+$grid.Columns['Exe'].DisplayIndex = 10
+$grid.Columns['Dbg'].DisplayIndex = 11
+$grid.Columns['Cmd'].DisplayIndex = 12
+$grid.Columns['Folder'].DisplayIndex = 13
 $dirtyHeaderColor = [System.Drawing.ColorTranslator]::FromHtml('#9E9E9E')
 $grid.Columns['Dirty'].HeaderCell.Style.BackColor = $dirtyHeaderColor
 $grid.Columns['Dirty'].HeaderCell.Style.ForeColor = [System.Drawing.Color]::White
@@ -2220,6 +2279,7 @@ $grid.Add_CellContentClick({
 
     $directory = [string]$row.Cells['Directory'].Value
     $cmdColor = if ($grid.Columns.Contains('CmdColor')) { [string]$row.Cells['CmdColor'].Value } else { '' }
+    $projectName = if ($grid.Columns.Contains('Name')) { [string]$row.Cells['Name'].Value } else { '' }
 
     if ([string]::IsNullOrWhiteSpace($directory)) {
         return
@@ -2235,6 +2295,9 @@ $grid.Add_CellContentClick({
                 return
             }
             Start-CmdInDirectory -Directory $directory -Command $agentCmd -CmdColor $cmdColor
+        }
+        'T' {
+            Start-TitleCardInDirectory -Directory $directory -ProjectName $projectName -CmdColor $cmdColor
         }
         '10x' {
             Open-In10x -Directory $directory -TenxExe $txtTenx.Text
