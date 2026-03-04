@@ -278,13 +278,37 @@ function Get-CmdColorDigits {
     return @('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F')
 }
 
+function ConvertTo-BooleanFlag {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    if ($Value -is [bool]) {
+        return [bool]$Value
+    }
+
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $false
+    }
+
+    $normalized = $text.Trim()
+    return (
+        [string]::Equals($normalized, 'true', [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($normalized, '1', [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
 function New-DirectoryEntry {
     param(
         [string]$Name,
         [string]$Path,
         [string]$CmdBgColor = '',
         [string]$CmdTextColor = '',
-        [string]$CmdColor = ''
+        [string]$CmdColor = '',
+        [bool]$IsStarred = $false
     )
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -311,6 +335,7 @@ function New-DirectoryEntry {
         CmdBgColor = $resolvedCmdColor.Substring(0, 1)
         CmdTextColor = $resolvedCmdColor.Substring(1, 1)
         CmdColor = $resolvedCmdColor
+        IsStarred = [bool]$IsStarred
     }
 }
 
@@ -348,9 +373,19 @@ function Load-Config {
             $entryCmdBgColor = ''
             $entryCmdTextColor = ''
             $entryCmdColor = ''
+            $entryIsStarred = $false
 
-            if ($line.Contains(',')) {
-                $parts = $line.Split(',', 2)
+            $entryLine = $line
+            $starMatch = [System.Text.RegularExpressions.Regex]::Match($entryLine, '^(?<entry>.*?)(?:,\s*)?\*\s*$')
+            if ($starMatch.Success) {
+                $entryIsStarred = $true
+                $entryLine = $starMatch.Groups['entry'].Value.Trim()
+            }
+
+            $entryPath = $entryLine
+
+            if ($entryLine.Contains(',')) {
+                $parts = $entryLine.Split(',', 2)
                 $entryName = $parts[0].Trim()
                 $entryPathAndMaybeColor = $parts[1].Trim()
 
@@ -372,7 +407,7 @@ function Load-Config {
                 }
             }
 
-            $entry = New-DirectoryEntry -Name $entryName -Path $entryPath -CmdBgColor $entryCmdBgColor -CmdTextColor $entryCmdTextColor -CmdColor $entryCmdColor
+            $entry = New-DirectoryEntry -Name $entryName -Path $entryPath -CmdBgColor $entryCmdBgColor -CmdTextColor $entryCmdTextColor -CmdColor $entryCmdColor -IsStarred:$entryIsStarred
             if ($null -ne $entry) {
                 $config.Directories.Add($entry)
             }
@@ -422,6 +457,7 @@ function Save-Config {
         $dirCmdBgColor = ''
         $dirCmdTextColor = ''
         $dirCmdColor = ''
+        $dirIsStarred = $false
 
         if ($entry -is [string]) {
             $dirPath = $entry.Trim()
@@ -439,6 +475,9 @@ function Save-Config {
             if ($entry.PSObject.Properties['CmdColor']) {
                 $dirCmdColor = [string]$entry.CmdColor
             }
+            if ($entry.PSObject.Properties['IsStarred']) {
+                $dirIsStarred = ConvertTo-BooleanFlag -Value $entry.IsStarred
+            }
         }
 
         if ([string]::IsNullOrWhiteSpace($dirPath)) {
@@ -452,7 +491,8 @@ function Save-Config {
         $resolvedCmdColor = Resolve-CmdColorCode -Directory $dirPath -ColorCode $dirCmdColor -BackgroundColor $dirCmdBgColor -TextColor $dirCmdTextColor
         $resolvedBackground = $resolvedCmdColor.Substring(0, 1)
         $resolvedText = $resolvedCmdColor.Substring(1, 1)
-        $lines.Add("$dirName,$dirPath,$resolvedBackground,$resolvedText")
+        $starSuffix = if ($dirIsStarred) { ',*' } else { '' }
+        $lines.Add("$dirName,$dirPath,$resolvedBackground,$resolvedText$starSuffix")
     }
 
     Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
@@ -621,6 +661,120 @@ function Test-GitWorkingTreeClean {
     }
 }
 
+function Get-DirtyCellStateFromRow {
+    param([System.Windows.Forms.DataGridViewRow]$Row)
+
+    if ($null -eq $Row -or $null -eq $Row.DataGridView -or -not $Row.DataGridView.Columns.Contains('Dirty')) {
+        return 'Unknown'
+    }
+
+    $cell = $Row.Cells['Dirty']
+    if ($null -eq $cell -or $null -eq $cell.Tag) {
+        return 'Unknown'
+    }
+
+    $tagText = [string]$cell.Tag
+    switch -Regex ($tagText.Trim()) {
+        '^(?i)clean$' { return 'Clean' }
+        '^(?i)dirty$' { return 'Dirty' }
+        default { return 'Unknown' }
+    }
+}
+
+function Reset-RowCellStylesToDefaults {
+    param([System.Windows.Forms.DataGridViewRow]$Row)
+
+    if ($null -eq $Row -or $null -eq $Row.DataGridView) {
+        return
+    }
+
+    if (Test-IsAddProjectRow -Row $Row) {
+        return
+    }
+
+    $grid = $Row.DataGridView
+    $columnsToReset = @('Name', 'Message', 'AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')
+    foreach ($columnName in $columnsToReset) {
+        if (-not $grid.Columns.Contains($columnName)) {
+            continue
+        }
+
+        $cell = $Row.Cells[$columnName]
+        if ($null -eq $cell) {
+            continue
+        }
+
+        $cell.Style.BackColor = [System.Drawing.Color]::Empty
+        $cell.Style.ForeColor = [System.Drawing.Color]::Empty
+        $cell.Style.SelectionBackColor = [System.Drawing.Color]::Empty
+        $cell.Style.SelectionForeColor = [System.Drawing.Color]::Empty
+    }
+
+    $Row.DefaultCellStyle.BackColor = [System.Drawing.Color]::Empty
+    $Row.DefaultCellStyle.ForeColor = [System.Drawing.Color]::Empty
+    $Row.DefaultCellStyle.SelectionBackColor = [System.Drawing.Color]::Empty
+    $Row.DefaultCellStyle.SelectionForeColor = [System.Drawing.Color]::Empty
+}
+
+function Apply-RowDimIfNotStarred {
+    param([System.Windows.Forms.DataGridViewRow]$Row)
+
+    if ($null -eq $Row -or $null -eq $Row.DataGridView) {
+        return
+    }
+
+    if (Test-IsAddProjectRow -Row $Row) {
+        return
+    }
+
+    if (Get-IsStarredFromRow -Row $Row) {
+        return
+    }
+
+    $buttonBack = [System.Drawing.ColorTranslator]::FromHtml('#D9D9D9')
+    $buttonFore = [System.Drawing.ColorTranslator]::FromHtml('#6F6F6F')
+    $textBack = [System.Drawing.ColorTranslator]::FromHtml('#F2F2F2')
+    $textFore = [System.Drawing.ColorTranslator]::FromHtml('#7A7A7A')
+    $grid = $Row.DataGridView
+
+    $Row.DefaultCellStyle.BackColor = $textBack
+    $Row.DefaultCellStyle.ForeColor = $textFore
+    $Row.DefaultCellStyle.SelectionBackColor = $textBack
+    $Row.DefaultCellStyle.SelectionForeColor = $textFore
+
+    foreach ($columnName in @('Name', 'Message')) {
+        if (-not $grid.Columns.Contains($columnName)) {
+            continue
+        }
+
+        $cell = $Row.Cells[$columnName]
+        if ($null -eq $cell) {
+            continue
+        }
+
+        $cell.Style.BackColor = $textBack
+        $cell.Style.ForeColor = $textFore
+        $cell.Style.SelectionBackColor = $textBack
+        $cell.Style.SelectionForeColor = $textFore
+    }
+
+    foreach ($columnName in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
+        if (-not $grid.Columns.Contains($columnName)) {
+            continue
+        }
+
+        $cell = $Row.Cells[$columnName]
+        if ($null -eq $cell) {
+            continue
+        }
+
+        $cell.Style.BackColor = $buttonBack
+        $cell.Style.ForeColor = $buttonFore
+        $cell.Style.SelectionBackColor = $buttonBack
+        $cell.Style.SelectionForeColor = $buttonFore
+    }
+}
+
 function Set-DirtyCellState {
     param(
         [System.Windows.Forms.DataGridViewRow]$Row,
@@ -645,10 +799,13 @@ function Set-DirtyCellState {
 
     $backColor = [System.Drawing.ColorTranslator]::FromHtml($colorHex)
     $cell.Value = '?'
+    $cell.Tag = $State
     $cell.Style.BackColor = $backColor
     $cell.Style.ForeColor = [System.Drawing.Color]::White
     $cell.Style.SelectionBackColor = $backColor
     $cell.Style.SelectionForeColor = [System.Drawing.Color]::White
+
+    Apply-RowDimIfNotStarred -Row $Row
 }
 
 function Update-DirtyCellsByDirectory {
@@ -1132,18 +1289,81 @@ function Set-XCellColorFromCmdColor {
         $tCell.Style.SelectionBackColor = $background
         $tCell.Style.SelectionForeColor = $foreground
     }
+
+    $isStarred = Get-IsStarredFromRow -Row $Row
+    Set-StarCellVisualState -Row $Row -IsStarred:$isStarred -CmdColor $resolved
+}
+
+function Get-IsStarredFromRow {
+    param([System.Windows.Forms.DataGridViewRow]$Row)
+
+    if ($null -eq $Row -or $null -eq $Row.DataGridView -or -not $Row.DataGridView.Columns.Contains('IsStarred')) {
+        return $false
+    }
+
+    return ConvertTo-BooleanFlag -Value $Row.Cells['IsStarred'].Value
+}
+
+function Set-StarCellVisualState {
+    param(
+        [System.Windows.Forms.DataGridViewRow]$Row,
+        [bool]$IsStarred = $false,
+        [string]$CmdColor = ''
+    )
+
+    if ($null -eq $Row -or $null -eq $Row.DataGridView) {
+        return
+    }
+
+    if ($Row.DataGridView.Columns.Contains('IsStarred')) {
+        $Row.Cells['IsStarred'].Value = [bool]$IsStarred
+    }
+
+    if (-not $Row.DataGridView.Columns.Contains('Star')) {
+        return
+    }
+
+    $cell = $Row.Cells['Star']
+    if ($null -eq $cell) {
+        return
+    }
+
+    $cell.Value = '*'
+    if ($IsStarred) {
+        $directory = if ($Row.DataGridView.Columns.Contains('Directory')) { [string]$Row.Cells['Directory'].Value } else { '' }
+        $resolved = Resolve-CmdColorCode -Directory $directory -ColorCode $CmdColor
+        $backColor = Get-ConsoleColorFromHexDigit -HexDigit $resolved[0]
+        $foreColor = Get-ConsoleColorFromHexDigit -HexDigit $resolved[1]
+        if ($backColor.ToArgb() -eq $foreColor.ToArgb()) {
+            $foreColor = Get-ReadableTextColor -BackgroundColor $backColor
+        }
+    }
+    else {
+        $backColor = [System.Drawing.Color]::White
+        $foreColor = [System.Drawing.Color]::White
+    }
+
+    $cell.Style.BackColor = $backColor
+    $cell.Style.ForeColor = $foreColor
+    $cell.Style.SelectionBackColor = $backColor
+    $cell.Style.SelectionForeColor = $foreColor
 }
 
 function Set-ScriptButtonCellValues {
     param(
         [System.Windows.Forms.DataGridViewRow]$Row,
         [string]$Directory,
-        [string]$CmdColor = ''
+        [string]$CmdColor = '',
+        [bool]$IsStarred = $false,
+        [ValidateSet('Unknown', 'Clean', 'Dirty')]
+        [string]$DirtyState = 'Unknown'
     )
 
     if ($null -eq $Row -or [string]::IsNullOrWhiteSpace($Directory)) {
         return
     }
+
+    Reset-RowCellStylesToDefaults -Row $Row
 
     $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Run' } else { '' }
     $Row.Cells['Dbg'].Value = if (Get-DebugBatPath -Directory $Directory) { 'Dbg' } else { '' }
@@ -1152,7 +1372,8 @@ function Set-ScriptButtonCellValues {
         $Row.Cells['CmdColor'].Value = Resolve-CmdColorCode -Directory $Directory -ColorCode $CmdColor
     }
     Set-XCellColorFromCmdColor -Row $Row -CmdColor $CmdColor
-    Set-DirtyCellState -Row $Row -State 'Unknown'
+    Set-StarCellVisualState -Row $Row -IsStarred:$IsStarred -CmdColor $CmdColor
+    Set-DirtyCellState -Row $Row -State $DirtyState
 }
 
 function Test-IsAddProjectRow {
@@ -1210,7 +1431,7 @@ function Add-AddProjectRow {
     }
 
     $null = Remove-AddProjectRow -Grid $Grid
-    $rowIndex = $Grid.Rows.Add('', '', '', $true)
+    $rowIndex = $Grid.Rows.Add('', '', '', $true, $false)
     $row = $Grid.Rows[$rowIndex]
     $rowBackColor = [System.Drawing.ColorTranslator]::FromHtml('#F4F6F8')
     $accentColor = [System.Drawing.ColorTranslator]::FromHtml('#2E7D32')
@@ -1255,8 +1476,9 @@ function Add-ProjectEntryRow {
     }
 
     $hadAddProjectRow = Remove-AddProjectRow -Grid $Grid
-    $rowIndex = $Grid.Rows.Add($Entry.Name, $Entry.Path, $Entry.CmdColor, $false)
-    Set-ScriptButtonCellValues -Row $Grid.Rows[$rowIndex] -Directory $Entry.Path -CmdColor $Entry.CmdColor
+    $entryIsStarred = if ($Entry.PSObject.Properties['IsStarred']) { ConvertTo-BooleanFlag -Value $Entry.IsStarred } else { $false }
+    $rowIndex = $Grid.Rows.Add($Entry.Name, $Entry.Path, $Entry.CmdColor, $false, $entryIsStarred)
+    Set-ScriptButtonCellValues -Row $Grid.Rows[$rowIndex] -Directory $Entry.Path -CmdColor $Entry.CmdColor -IsStarred:$entryIsStarred
 
     if ($hadAddProjectRow) {
         Add-AddProjectRow -Grid $Grid
@@ -1287,7 +1509,8 @@ function Get-UniqueDirectoryEntriesFromGrid {
         if ($seen.Add($dirPath)) {
             $nameValue = [string]$row.Cells['Name'].Value
             $cmdColorValue = if ($Grid.Columns.Contains('CmdColor')) { [string]$row.Cells['CmdColor'].Value } else { '' }
-            $result.Add((New-DirectoryEntry -Name $nameValue -Path $dirPath -CmdColor $cmdColorValue))
+            $isStarredValue = if ($Grid.Columns.Contains('IsStarred')) { ConvertTo-BooleanFlag -Value $row.Cells['IsStarred'].Value } else { $false }
+            $result.Add((New-DirectoryEntry -Name $nameValue -Path $dirPath -CmdColor $cmdColorValue -IsStarred:$isStarredValue))
         }
     }
 
@@ -1659,6 +1882,7 @@ function Show-ProjectDeleteCellDialog {
         }
 
         Set-XCellColorFromCmdColor -Row $row -CmdColor $newCmdColor
+        Apply-RowDimIfNotStarred -Row $row
         & $persistConfig
     }
 
@@ -1814,8 +2038,8 @@ function Resize-FormHeightToFitGridRows {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ai_mux'
-$form.Width = 550
-$form.Height = 275
+$form.Width = 620
+$form.Height = 320
 $form.StartPosition = 'CenterScreen'
 
 $layout = New-Object System.Windows.Forms.TableLayoutPanel
@@ -1932,7 +2156,7 @@ $btnSave.Location = New-Object System.Drawing.Point(348, 8)
 $topPanel.Controls.Add($btnSave)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = 'Rows show one directory each by name. Click o for options, t for titlecard, or + to add.'
+$hint.Text = 'Rows show one directory each by name. Click o for options, t for titlecard, * to mark active, or + to add.'
 $hint.AutoSize = $true
 $hint.Location = New-Object System.Drawing.Point(670, 76)
 $topPanel.Controls.Add($hint)
@@ -1989,6 +2213,12 @@ $colIsAddRow.HeaderText = 'IsAddRow'
 $colIsAddRow.Visible = $false
 $grid.Columns.Add($colIsAddRow) | Out-Null
 
+$colIsStarred = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colIsStarred.Name = 'IsStarred'
+$colIsStarred.HeaderText = 'IsStarred'
+$colIsStarred.Visible = $false
+$grid.Columns.Add($colIsStarred) | Out-Null
+
 $colName = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colName.Name = 'Name'
 $colName.HeaderText = 'Name'
@@ -2022,16 +2252,17 @@ $gridButtonColors = @{
     'Folder' = '#F3E5AB'
     'X' = '#C62828'
     'T' = '#00695C'
+    'Star' = '#FFFFFF'
 }
 
-foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
+foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
-    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'Exe') { 'Run' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'T') { 't' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } else { $name }
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'Exe') { 'Run' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'T') { 't' } elseif ($name -eq 'Star') { '*' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } else { $name }
     $col.Name = $name
-    $col.HeaderText = if ($name -eq 'X' -or $name -eq 'T') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
+    $col.HeaderText = if ($name -eq 'X' -or $name -eq 'T' -or $name -eq 'Star') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
     $col.Text = $displayName
     $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Dbg' -and $name -ne 'Release')
-    if ($name -eq 'X' -or $name -eq 'T') {
+    if ($name -eq 'X' -or $name -eq 'T' -or $name -eq 'Star') {
         $col.Width = 15
     }
     elseif ($name -eq 'Folder') {
@@ -2060,18 +2291,19 @@ foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release
 
 $grid.Columns['X'].DisplayIndex = 0
 $grid.Columns['T'].DisplayIndex = 1
-$grid.Columns['Name'].DisplayIndex = 2
-$grid.Columns['AI'].DisplayIndex = 3
-$grid.Columns['10x'].DisplayIndex = 4
-$grid.Columns['Diff'].DisplayIndex = 5
-$grid.Columns['Dirty'].DisplayIndex = 6
-$grid.Columns['Message'].DisplayIndex = 7
-$grid.Columns['Pull'].DisplayIndex = 8
-$grid.Columns['Release'].DisplayIndex = 9
-$grid.Columns['Exe'].DisplayIndex = 10
-$grid.Columns['Dbg'].DisplayIndex = 11
-$grid.Columns['Cmd'].DisplayIndex = 12
-$grid.Columns['Folder'].DisplayIndex = 13
+$grid.Columns['Star'].DisplayIndex = 2
+$grid.Columns['Name'].DisplayIndex = 3
+$grid.Columns['AI'].DisplayIndex = 4
+$grid.Columns['10x'].DisplayIndex = 5
+$grid.Columns['Diff'].DisplayIndex = 6
+$grid.Columns['Dirty'].DisplayIndex = 7
+$grid.Columns['Message'].DisplayIndex = 8
+$grid.Columns['Pull'].DisplayIndex = 9
+$grid.Columns['Release'].DisplayIndex = 10
+$grid.Columns['Exe'].DisplayIndex = 11
+$grid.Columns['Dbg'].DisplayIndex = 12
+$grid.Columns['Cmd'].DisplayIndex = 13
+$grid.Columns['Folder'].DisplayIndex = 14
 $dirtyHeaderColor = [System.Drawing.ColorTranslator]::FromHtml('#9E9E9E')
 $grid.Columns['Dirty'].HeaderCell.Style.BackColor = $dirtyHeaderColor
 $grid.Columns['Dirty'].HeaderCell.Style.ForeColor = [System.Drawing.Color]::White
@@ -2169,7 +2401,8 @@ function Refresh-Grid {
             $entryCmdBgColor = if ($entry.PSObject.Properties['CmdBgColor']) { [string]$entry.CmdBgColor } else { '' }
             $entryCmdTextColor = if ($entry.PSObject.Properties['CmdTextColor']) { [string]$entry.CmdTextColor } else { '' }
             $entryCmdColor = if ($entry.PSObject.Properties['CmdColor']) { [string]$entry.CmdColor } else { '' }
-            $normalized = New-DirectoryEntry -Name ([string]$entry.Name) -Path ([string]$entry.Path) -CmdBgColor $entryCmdBgColor -CmdTextColor $entryCmdTextColor -CmdColor $entryCmdColor
+            $entryIsStarred = if ($entry.PSObject.Properties['IsStarred']) { ConvertTo-BooleanFlag -Value $entry.IsStarred } else { $false }
+            $normalized = New-DirectoryEntry -Name ([string]$entry.Name) -Path ([string]$entry.Path) -CmdBgColor $entryCmdBgColor -CmdTextColor $entryCmdTextColor -CmdColor $entryCmdColor -IsStarred:$entryIsStarred
         }
 
         if ($null -eq $normalized) {
@@ -2311,6 +2544,13 @@ $grid.Add_CellContentClick({
                 return
             }
             Start-CmdInDirectory -Directory $directory -Command $agentCmd -CmdColor $cmdColor
+        }
+        'Star' {
+            $isStarred = Get-IsStarredFromRow -Row $row
+            $newIsStarred = -not $isStarred
+            $currentDirtyState = Get-DirtyCellStateFromRow -Row $row
+            Set-ScriptButtonCellValues -Row $row -Directory $directory -CmdColor $cmdColor -IsStarred:$newIsStarred -DirtyState $currentDirtyState
+            $null = Save-GridConfigToFile -Path $ConfigPath -Grid $grid -AgentCmd $txtAgent.Text.Trim() -TenxExe $txtTenx.Text.Trim() -FilePilotExe $txtFilePilot.Text.Trim() -DiffExe $txtDiff.Text.Trim()
         }
         'T' {
             Start-TitleCardInDirectory -Directory $directory -ProjectName $projectName -CmdColor $cmdColor

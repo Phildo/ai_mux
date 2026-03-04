@@ -4,4 +4,4 @@ TENX_EXE=C:\Path\To\10x\10x.exe
 FILEPILOT_EXE=C:\Path\To\FilePilot\FPilot.exe
 DIFF_EXE=C:\Path\To\goodiff.exe
 [DIRS]
-repo_name,E:\path\to\repo,0,A
+repo_name,E:\path\to\repo,0,A,*

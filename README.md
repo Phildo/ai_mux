@@ -25,14 +25,14 @@ FILEPILOT_EXE=FilePilot.exe
 DIFF_EXE=diff.exe
 [DIRS]
 repo1,C:\path\to\repo1,0,A
-repo2,D:\work\repo2,1,E
+repo2,D:\work\repo2,1,E,*
 ```
 
 - `AGENT_CMD`: command used by the `AI` button.
 - `TENX_EXE`: path or command name for 10x editor executable.
 - `FILEPILOT_EXE`: path or command name for FilePilot executable.
 - `DIFF_EXE`: path or command name for diff executable.
-- `[DIRS]`: one entry per line in `name,path,bg,text` format, where `bg` and `text` are single hex digits (`0`-`F`) for cmd background/text colors.
+- `[DIRS]`: one entry per line in `name,path,bg,text` format, where `bg` and `text` are single hex digits (`0`-`F`) for cmd background/text colors. Append `,*` to mark a row as active.
 - Path-only lines are still accepted; the app auto-sets `name` from the folder name when loading/saving.
 - If colors are omitted or invalid, ai_mux uses stable auto-generated defaults for that directory.
 
@@ -42,6 +42,7 @@ repo2,D:\work\repo2,1,E
 - All launched `cmd` windows are auto-labeled as `<project-folder>` and use each row's configured per-project cmd color.
 - Clicking `o` opens a per-project dialog with `bg color`, `text color`, and `remove`; color changes and remove are saved to `config.txt` immediately.
 - Clicking `t` opens a tiny draggable titlecard window for that project name, using the row's configured cmd color.
+- Clicking `*` toggles an active marker for that row: black/white when off, row color when on. This is saved in `config.txt` with a trailing `,*` on that line.
 - The `o` button for each row is colored from that same cmd background/text combination so the row color matches the launched terminal color.
 - `10x`: finds first `*.10x` recursively and opens it in 10x; if none, opens the directory in 10x.
 - `Push` cell: type a commit message and press `Enter` to run `git add . && git commit -m "<message>" && git push`.
