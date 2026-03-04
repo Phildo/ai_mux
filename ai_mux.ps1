@@ -758,7 +758,7 @@ function Apply-RowDimIfNotStarred {
         $cell.Style.SelectionForeColor = $textFore
     }
 
-    foreach ($columnName in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
+    foreach ($columnName in @('AI', '10x', 'Diff', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
         if (-not $grid.Columns.Contains($columnName)) {
             continue
         }
