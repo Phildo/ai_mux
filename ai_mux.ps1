@@ -1095,7 +1095,13 @@ function Set-XCellColorFromCmdColor {
         [string]$CmdColor
     )
 
-    if ($null -eq $Row -or $null -eq $Row.DataGridView -or -not $Row.DataGridView.Columns.Contains('X')) {
+    if ($null -eq $Row -or $null -eq $Row.DataGridView) {
+        return
+    }
+
+    $hasXColumn = $Row.DataGridView.Columns.Contains('X')
+    $hasTColumn = $Row.DataGridView.Columns.Contains('T')
+    if (-not $hasXColumn -and -not $hasTColumn) {
         return
     }
 
@@ -1111,11 +1117,21 @@ function Set-XCellColorFromCmdColor {
         $foreground = Get-ReadableTextColor -BackgroundColor $background
     }
 
-    $xCell = $Row.Cells['X']
-    $xCell.Style.BackColor = $background
-    $xCell.Style.ForeColor = $foreground
-    $xCell.Style.SelectionBackColor = $background
-    $xCell.Style.SelectionForeColor = $foreground
+    if ($hasXColumn) {
+        $xCell = $Row.Cells['X']
+        $xCell.Style.BackColor = $background
+        $xCell.Style.ForeColor = $foreground
+        $xCell.Style.SelectionBackColor = $background
+        $xCell.Style.SelectionForeColor = $foreground
+    }
+
+    if ($hasTColumn) {
+        $tCell = $Row.Cells['T']
+        $tCell.Style.BackColor = $background
+        $tCell.Style.ForeColor = $foreground
+        $tCell.Style.SelectionBackColor = $background
+        $tCell.Style.SelectionForeColor = $foreground
+    }
 }
 
 function Set-ScriptButtonCellValues {
