@@ -2061,6 +2061,12 @@ $btnToggleConfig.Width = 95
 $btnToggleConfig.Location = New-Object System.Drawing.Point(8, 6)
 $configBar.Controls.Add($btnToggleConfig)
 
+$btnEditConfig = New-Object System.Windows.Forms.Button
+$btnEditConfig.Text = 'Edit Config'
+$btnEditConfig.Width = 95
+$btnEditConfig.Location = New-Object System.Drawing.Point(111, 6)
+$configBar.Controls.Add($btnEditConfig)
+
 $split = New-Object System.Windows.Forms.SplitContainer
 $split.Dock = 'Fill'
 $split.Orientation = [System.Windows.Forms.Orientation]::Horizontal
@@ -2155,12 +2161,6 @@ $btnSave.Width = 95
 $btnSave.Location = New-Object System.Drawing.Point(348, 8)
 $topPanel.Controls.Add($btnSave)
 
-$hint = New-Object System.Windows.Forms.Label
-$hint.Text = 'Rows show one directory each by name. Click o for options, t for titlecard, * to mark active, or + to add.'
-$hint.AutoSize = $true
-$hint.Location = New-Object System.Drawing.Point(670, 76)
-$topPanel.Controls.Add($hint)
-
 $grid = New-Object AiMuxControls.MessageEnterDataGridView
 $grid.Dock = 'Fill'
 $grid.AllowUserToAddRows = $false
@@ -2192,6 +2192,15 @@ $btnToggleConfig.Add_Click({
 
     $btnToggleConfig.Text = 'Hide Config'
     Resize-TopPanelToContent -Panel $topPanel -Split $split
+})
+
+$btnEditConfig.Add_Click({
+    try {
+        Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$ConfigPath`"" | Out-Null
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to open config '$ConfigPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+    }
 })
 $split.Panel1Collapsed = $true
 
