@@ -693,7 +693,7 @@ function Reset-RowCellStylesToDefaults {
     }
 
     $grid = $Row.DataGridView
-    $columnsToReset = @('Name', 'Message', 'AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')
+    $columnsToReset = @('Name', 'Message', 'AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')
     foreach ($columnName in $columnsToReset) {
         if (-not $grid.Columns.Contains($columnName)) {
             continue
@@ -758,7 +758,7 @@ function Apply-RowDimIfNotStarred {
         $cell.Style.SelectionForeColor = $textFore
     }
 
-    foreach ($columnName in @('AI', '10x', 'Diff', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
+    foreach ($columnName in @('AI', '10x', 'Diff', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
         if (-not $grid.Columns.Contains($columnName)) {
             continue
         }
@@ -1099,6 +1099,12 @@ function Get-DebugBatPath {
     return Get-BatPath -Directory $Directory -FileName 'debug.bat'
 }
 
+function Get-SpclBatPath {
+    param([string]$Directory)
+
+    return Get-BatPath -Directory $Directory -FileName 'spcl.bat'
+}
+
 function Get-TitleCardScriptPath {
     return Join-Path -Path $PSScriptRoot -ChildPath 'tiny_windows.ps1'
 }
@@ -1205,6 +1211,32 @@ function Start-DebugBatInDirectory {
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to run '$debugBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+    }
+}
+
+function Start-SpclBatInDirectory {
+    param(
+        [string]$Directory,
+        [string]$CmdColor = ''
+    )
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        [System.Windows.Forms.MessageBox]::Show("Directory not found: $Directory", 'ai_mux', 'OK', 'Error') | Out-Null
+        return
+    }
+
+    $spclBatPath = Get-SpclBatPath -Directory $Directory
+    if ([string]::IsNullOrWhiteSpace($spclBatPath)) {
+        [System.Windows.Forms.MessageBox]::Show("spcl.bat not found in: $Directory", 'ai_mux', 'OK', 'Warning') | Out-Null
+        return
+    }
+
+    try {
+        $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
+        Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix & call `"`"$spclBatPath`"`"" -WorkingDirectory $Directory | Out-Null
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to run '$spclBatPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
     }
 }
 
@@ -1367,6 +1399,7 @@ function Set-ScriptButtonCellValues {
 
     $Row.Cells['Exe'].Value = if (Get-RunBatPath -Directory $Directory) { 'Run' } else { '' }
     $Row.Cells['Dbg'].Value = if (Get-DebugBatPath -Directory $Directory) { 'Dbg' } else { '' }
+    $Row.Cells['Spcl'].Value = if (Get-SpclBatPath -Directory $Directory) { 'Spcl' } else { '' }
     $Row.Cells['Release'].Value = if (Get-BuildReleaseBatPath -Directory $Directory) { 'Build' } else { '' }
     if ($Row.DataGridView.Columns.Contains('CmdColor')) {
         $Row.Cells['CmdColor'].Value = Resolve-CmdColorCode -Directory $Directory -ColorCode $CmdColor
@@ -2256,6 +2289,7 @@ $gridButtonColors = @{
     'Dirty' = '#9E9E9E'
     'Exe' = '#EF6C00'
     'Dbg' = '#6A1B9A'
+    'Spcl' = '#AD1457'
     'Release' = '#8B0000'
     'Cmd' = '#000000'
     'Folder' = '#F3E5AB'
@@ -2264,13 +2298,13 @@ $gridButtonColors = @{
     'Star' = '#FFFFFF'
 }
 
-foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')) {
+foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
-    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'Exe') { 'Run' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'T') { 't' } elseif ($name -eq 'Star') { '*' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } else { $name }
+    $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'Exe') { 'Run' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'T') { 't' } elseif ($name -eq 'Star') { '*' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } elseif ($name -eq 'Spcl') { 'Spcl' } else { $name }
     $col.Name = $name
     $col.HeaderText = if ($name -eq 'X' -or $name -eq 'T' -or $name -eq 'Star') { '' } elseif ($name -eq 'Dirty') { 'Dirty' } else { $displayName }
     $col.Text = $displayName
-    $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Dbg' -and $name -ne 'Release')
+    $col.UseColumnTextForButtonValue = ($name -ne 'Exe' -and $name -ne 'Dbg' -and $name -ne 'Spcl' -and $name -ne 'Release')
     if ($name -eq 'X' -or $name -eq 'T' -or $name -eq 'Star') {
         $col.Width = 15
     }
@@ -2311,8 +2345,9 @@ $grid.Columns['Message'].DisplayIndex = 9
 $grid.Columns['Release'].DisplayIndex = 10
 $grid.Columns['Exe'].DisplayIndex = 11
 $grid.Columns['Dbg'].DisplayIndex = 12
-$grid.Columns['Cmd'].DisplayIndex = 13
-$grid.Columns['Folder'].DisplayIndex = 14
+$grid.Columns['Spcl'].DisplayIndex = 13
+$grid.Columns['Cmd'].DisplayIndex = 14
+$grid.Columns['Folder'].DisplayIndex = 15
 $dirtyHeaderColor = [System.Drawing.ColorTranslator]::FromHtml('#9E9E9E')
 $grid.Columns['Dirty'].HeaderCell.Style.BackColor = $dirtyHeaderColor
 $grid.Columns['Dirty'].HeaderCell.Style.ForeColor = [System.Drawing.Color]::White
@@ -2590,6 +2625,9 @@ $grid.Add_CellContentClick({
         }
         'Dbg' {
             Start-DebugBatInDirectory -Directory $directory -CmdColor $cmdColor
+        }
+        'Spcl' {
+            Start-SpclBatInDirectory -Directory $directory -CmdColor $cmdColor
         }
         'Release' {
             Start-BuildReleaseBatInDirectory -Directory $directory -CmdColor $cmdColor

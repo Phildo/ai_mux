@@ -50,7 +50,9 @@ repo2,D:\work\repo2,1,E,*
 - `Diff`: opens the configured `DIFF_EXE` with that folder path as its argument.
 - `Dirty` (`?` button): auto-checks on load in the background, and you can click `?` to refresh manually with `git status --porcelain`; green means clean, red means dirty.
 - `Run`: runs `run.bat` in that folder (button is blank when no `run.bat` is present).
-- `Build`: runs `buildrelease.bat` in that folder (`Build` button text).
+- `Dbg`: runs `debug.bat` in that folder (button is blank when no `debug.bat` is present).
+- `Spcl`: runs `spcl.bat` in that folder (button is blank when no `spcl.bat` is present).
+- `Build`: runs `build.bat` in that folder (`Build` button text).
 - `Cmd`: opens plain `cmd` in that directory.
 - `Folder`: opens that directory using `FILEPILOT_EXE`.
 
