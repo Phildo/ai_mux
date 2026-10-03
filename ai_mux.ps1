@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'config.txt')
 )
 
@@ -137,6 +137,97 @@ namespace AiMuxControls
 $script:DirtyStatusPollTimer = $null
 $script:DirtyStatusProcessInfos = @()
 $script:DirtyStatusGrid = $null
+$script:GitHubJobs = New-Object System.Collections.ArrayList
+$script:GitHubTimer = $null
+$script:GitHubPool = $null
+$script:GitHubVersions = @{}
+$script:GitHubHelperPath = Join-Path $PSScriptRoot 'github.ps1'
+. $script:GitHubHelperPath
+. (Join-Path $PSScriptRoot 'misc.ps1')
+
+function Set-GitHubCells {
+    param($Grid, [string]$Directory, [string]$State, [string]$Details = '')
+    foreach ($row in $Grid.Rows) {
+        if ([string]$row.Cells['Directory'].Value -ne $Directory) { continue }
+        $index = $Grid.Columns['GitHub'].Index
+        $row.Cells[$index] = if ($State -eq 'Available') { New-Object System.Windows.Forms.DataGridViewButtonCell } else { New-Object System.Windows.Forms.DataGridViewTextBoxCell }
+        $cell = $row.Cells[$index]
+        $cell.ReadOnly = $true
+        $cell.Tag = $State
+        $cell.Value = if ($State -eq 'Available') { 'Create' } elseif ($State -eq 'Publishing') { '...' } else { '' }
+        $cell.ToolTipText = if ($Details) { $Details } elseif ($State -eq 'Available') { 'Create a private GitHub repository and push this branch' } elseif ($State -eq 'Published') { 'Already has a GitHub remote' } else { 'Checking GitHub remote...' }
+    }
+}
+
+function Start-GitHubWork {
+    param($Grid, [string]$Directory, [switch]$Publish)
+    $existing = @($script:GitHubJobs | Where-Object { $_.Directory -eq $Directory })
+    if (@($existing | Where-Object { $_.Publish }).Count -gt 0 -or (-not $Publish -and $existing.Count -gt 0)) { return }
+    if ($null -eq $script:GitHubPool) {
+        $script:GitHubPool = [runspacefactory]::CreateRunspacePool(1, 4)
+        $script:GitHubPool.Open()
+        $script:GitHubTimer = New-Object System.Windows.Forms.Timer
+        $script:GitHubTimer.Interval = 150
+        $script:GitHubTimer.Add_Tick({
+            foreach ($job in @($script:GitHubJobs.ToArray())) {
+                if (-not $job.Handle.IsCompleted) { continue }
+                $result = $null
+                try {
+                    $results = $job.Worker.EndInvoke($job.Handle)
+                    $result = $results | Select-Object -Last 1
+                    if ($null -eq $result) { throw 'GitHub operation did not return a result.' }
+                }
+                catch { $result = [pscustomobject]@{ State = 'Error'; Message = $_.Exception.Message; Error = $true } }
+                finally {
+                    $job.Worker.Dispose()
+                    $script:GitHubJobs.Remove($job)
+                }
+                if ($job.Grid.IsDisposed) { continue }
+                $publishing = @($script:GitHubJobs | Where-Object { $_.Directory -eq $job.Directory -and $_.Publish }).Count -gt 0
+                if (-not $publishing -and $script:GitHubVersions[$job.Directory] -eq $job.Version) { Set-GitHubCells $job.Grid $job.Directory $result.State $result.Message }
+                if ($job.Publish) {
+                    Start-DirtyStatusRefreshForGrid -Grid $job.Grid
+                    $icon = if ($result.Error) { 'Error' } else { 'Information' }
+                    [System.Windows.Forms.MessageBox]::Show($job.Grid.FindForm(), $result.Message, 'GitHub', 'OK', $icon) | Out-Null
+                }
+            }
+            if ($script:GitHubJobs.Count -eq 0) { $script:GitHubTimer.Stop() }
+        })
+    }
+    $worker = [powershell]::Create()
+    $worker.RunspacePool = $script:GitHubPool
+    $null = $worker.AddScript({
+        param($HelperPath, $Directory, $Publish)
+        $ErrorActionPreference = 'Stop'
+        . $HelperPath
+        try {
+            $message = ''
+            if ($Publish) { $message = Publish-ProjectToGitHub $Directory }
+            [pscustomobject]@{ State = (Get-ProjectGitHubState $Directory); Message = $message; Error = $false }
+        }
+        catch {
+            $message = $_.Exception.Message
+            $state = 'Error'
+            try { $state = Get-ProjectGitHubState $Directory } catch { }
+            [pscustomobject]@{ State = $state; Message = $message; Error = $true }
+        }
+    }.ToString()).AddArgument($script:GitHubHelperPath).AddArgument($Directory).AddArgument([bool]$Publish)
+    Set-GitHubCells $Grid $Directory $(if ($Publish) { 'Publishing' } else { 'Checking' })
+    $handle = $worker.BeginInvoke()
+    $version = [guid]::NewGuid().ToString()
+    $script:GitHubVersions[$Directory] = $version
+    [void]$script:GitHubJobs.Add([pscustomobject]@{ Grid = $Grid; Directory = $Directory; Publish = [bool]$Publish; Worker = $worker; Handle = $handle; Version = $version })
+    $script:GitHubTimer.Start()
+}
+
+function Start-GitHubRefreshForGrid {
+    param($Grid)
+    foreach ($row in $Grid.Rows) {
+        if (-not (Test-IsAddProjectRow $row)) {
+            Start-GitHubWork $Grid ([string]$row.Cells['Directory'].Value)
+        }
+    }
+}
 
 function Get-DirectoryNameFromPath {
     param([string]$Path)
@@ -693,7 +784,7 @@ function Reset-RowCellStylesToDefaults {
     }
 
     $grid = $Row.DataGridView
-    $columnsToReset = @('Name', 'Message', 'AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')
+    $columnsToReset = @('Name', 'Message', 'AI', '10x', 'Diff', 'Dirty', 'misc', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')
     foreach ($columnName in $columnsToReset) {
         if (-not $grid.Columns.Contains($columnName)) {
             continue
@@ -758,7 +849,7 @@ function Apply-RowDimIfNotStarred {
         $cell.Style.SelectionForeColor = $textFore
     }
 
-    foreach ($columnName in @('AI', '10x', 'Diff', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
+    foreach ($columnName in @('AI', '10x', 'Diff', 'misc', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T')) {
         if (-not $grid.Columns.Contains($columnName)) {
             continue
         }
@@ -1258,23 +1349,13 @@ function Start-BuildReleaseBatInDirectory {
     }
 
     try {
-        $runBatPath = Get-RunBatPath -Directory $Directory
-        $command = if ([string]::IsNullOrWhiteSpace($runBatPath)) {
-            "call `"$buildReleaseBatPath`""
-        }
-        else {
-            "call `"$buildReleaseBatPath`" && call `"$runBatPath`""
-        }
+        $command = "call `"$buildReleaseBatPath`""
 
         $prefix = Get-CmdPrefixCommands -Directory $Directory -CmdColor $CmdColor
         Start-Process -FilePath 'cmd.exe' -ArgumentList "/c $prefix & $command" -WorkingDirectory $Directory | Out-Null
-
-        if ([string]::IsNullOrWhiteSpace($runBatPath)) {
-            [System.Windows.Forms.MessageBox]::Show("run.bat not found in: $Directory`r`nExecuted build.bat only.", 'ai_mux', 'OK', 'Warning') | Out-Null
-        }
     }
     catch {
-        [System.Windows.Forms.MessageBox]::Show("Failed to run build.bat + run.bat in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Failed to run build.bat in '$Directory'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
     }
 }
 
@@ -1512,6 +1593,7 @@ function Add-ProjectEntryRow {
     $entryIsStarred = if ($Entry.PSObject.Properties['IsStarred']) { ConvertTo-BooleanFlag -Value $Entry.IsStarred } else { $false }
     $rowIndex = $Grid.Rows.Add($Entry.Name, $Entry.Path, $Entry.CmdColor, $false, $entryIsStarred)
     Set-ScriptButtonCellValues -Row $Grid.Rows[$rowIndex] -Directory $Entry.Path -CmdColor $Entry.CmdColor -IsStarred:$entryIsStarred
+    Start-GitHubWork -Grid $Grid -Directory $Entry.Path
 
     if ($hadAddProjectRow) {
         Add-AddProjectRow -Grid $Grid
@@ -1585,6 +1667,8 @@ function Show-ProjectAddCellDialog {
         return
     }
 
+    $defaultProjectPath = 'E:\archive\projects\github\'
+
     $dialog = New-Object System.Windows.Forms.Form
     $dialog.Text = 'Add Project'
     $dialog.StartPosition = 'CenterParent'
@@ -1592,7 +1676,7 @@ function Show-ProjectAddCellDialog {
     $dialog.MinimizeBox = $false
     $dialog.MaximizeBox = $false
     $dialog.ShowInTaskbar = $false
-    $dialog.ClientSize = New-Object System.Drawing.Size(520, 128)
+    $dialog.ClientSize = New-Object System.Drawing.Size(520, 158)
 
     $lblPath = New-Object System.Windows.Forms.Label
     $lblPath.Text = 'Path'
@@ -1603,6 +1687,7 @@ function Show-ProjectAddCellDialog {
     $txtPath = New-Object System.Windows.Forms.TextBox
     $txtPath.Width = 330
     $txtPath.Location = New-Object System.Drawing.Point(72, 12)
+    $txtPath.Text = $defaultProjectPath
     $dialog.Controls.Add($txtPath)
 
     $btnBrowse = New-Object System.Windows.Forms.Button
@@ -1622,10 +1707,16 @@ function Show-ProjectAddCellDialog {
     $txtName.Location = New-Object System.Drawing.Point(72, 48)
     $dialog.Controls.Add($txtName)
 
+    $chkGitHub = New-Object System.Windows.Forms.CheckBox
+    $chkGitHub.Text = 'Create private GitHub repository (New Project)'
+    $chkGitHub.AutoSize = $true
+    $chkGitHub.Location = New-Object System.Drawing.Point(72, 80)
+    $dialog.Controls.Add($chkGitHub)
+
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = 'Cancel'
     $btnCancel.Width = 90
-    $btnCancel.Location = New-Object System.Drawing.Point(286, 86)
+    $btnCancel.Location = New-Object System.Drawing.Point(286, 116)
     $btnCancel.Add_Click({
         $dialog.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
         $dialog.Close()
@@ -1635,18 +1726,19 @@ function Show-ProjectAddCellDialog {
     $btnAdd = New-Object System.Windows.Forms.Button
     $btnAdd.Text = 'Add Project'
     $btnAdd.Width = 130
-    $btnAdd.Location = New-Object System.Drawing.Point(380, 86)
+    $btnAdd.Location = New-Object System.Drawing.Point(380, 116)
     $dialog.Controls.Add($btnAdd)
 
     $btnNewProject = New-Object System.Windows.Forms.Button
     $btnNewProject.Text = 'New Project'
     $btnNewProject.Width = 130
-    $btnNewProject.Location = New-Object System.Drawing.Point(152, 86)
+    $btnNewProject.Location = New-Object System.Drawing.Point(152, 116)
     $dialog.Controls.Add($btnNewProject)
 
     $btnBrowse.Add_Click({
         $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
         $folderDialog.Description = 'Select a project directory or parent location'
+        $folderDialog.SelectedPath = $txtPath.Text.Trim()
         if ($folderDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
             return
         }
@@ -1755,16 +1847,7 @@ function Show-ProjectAddCellDialog {
         }
 
         try {
-            $gitInitOutput = & git -C $newProjectPath init 2>&1
-            $gitInitExitCode = $LASTEXITCODE
-            if ($gitInitExitCode -ne 0) {
-                $details = ($gitInitOutput | Out-String).Trim()
-                if ([string]::IsNullOrWhiteSpace($details)) {
-                    $details = 'Unknown git error.'
-                }
-
-                throw "git init failed with exit code $gitInitExitCode.`r`n$details"
-            }
+            $null = Invoke-ProjectCommand git @('init') $newProjectPath
         }
         catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to initialize git repository in '$newProjectPath'.`r`n$($_.Exception.Message)", 'ai_mux', 'OK', 'Error') | Out-Null
@@ -1773,6 +1856,10 @@ function Show-ProjectAddCellDialog {
 
         if (-not (& $tryAddProjectEntry -EntryName $folderName -EntryPath $newProjectPath)) {
             return
+        }
+
+        if ($chkGitHub.Checked) {
+            Start-GitHubWork -Grid $Grid -Directory $newProjectPath -Publish
         }
 
         $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -2071,7 +2158,7 @@ function Resize-FormHeightToFitGridRows {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ai_mux'
-$form.Width = 620
+$form.Width = 675
 $form.Height = 320
 $form.StartPosition = 'CenterScreen'
 
@@ -2281,10 +2368,21 @@ $colMessage.Width = 70
 $colMessage.ReadOnly = $false
 $grid.Columns.Add($colMessage) | Out-Null
 
+$colGitHub = New-Object System.Windows.Forms.DataGridViewButtonColumn
+$colGitHub.Name = 'GitHub'
+$colGitHub.HeaderText = 'GitHub'
+$colGitHub.Width = 55
+$colGitHub.ReadOnly = $true
+$colGitHub.UseColumnTextForButtonValue = $false
+$colGitHub.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$colGitHub.HeaderCell.ToolTipText = 'Refresh GitHub remote status for all rows'
+$grid.Columns.Add($colGitHub) | Out-Null
+
 $gridButtonColors = @{
     'AI' = '#7B1FA2'
     '10x' = '#2E7D32'
     'Diff' = '#66BB6A'
+    'misc' = '#00695C'
     'Pull' = '#1565C0'
     'Dirty' = '#9E9E9E'
     'Exe' = '#EF6C00'
@@ -2298,7 +2396,7 @@ $gridButtonColors = @{
     'Star' = '#FFFFFF'
 }
 
-foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')) {
+foreach ($name in @('AI', '10x', 'Diff', 'Dirty', 'misc', 'Pull', 'Exe', 'Dbg', 'Spcl', 'Release', 'Cmd', 'Folder', 'X', 'T', 'Star')) {
     $col = New-Object System.Windows.Forms.DataGridViewButtonColumn
     $displayName = if ($name -eq 'Release') { 'Build' } elseif ($name -eq 'Exe') { 'Run' } elseif ($name -eq 'X') { 'o' } elseif ($name -eq 'T') { 't' } elseif ($name -eq 'Star') { '*' } elseif ($name -eq 'Dirty') { '?' } elseif ($name -eq 'Dbg') { 'Dbg' } elseif ($name -eq 'Spcl') { 'Spcl' } else { $name }
     $col.Name = $name
@@ -2342,12 +2440,15 @@ $grid.Columns['Pull'].DisplayIndex = 6
 $grid.Columns['Dirty'].DisplayIndex = 7
 $grid.Columns['Diff'].DisplayIndex = 8
 $grid.Columns['Message'].DisplayIndex = 9
-$grid.Columns['Release'].DisplayIndex = 10
-$grid.Columns['Exe'].DisplayIndex = 11
-$grid.Columns['Dbg'].DisplayIndex = 12
-$grid.Columns['Spcl'].DisplayIndex = 13
-$grid.Columns['Cmd'].DisplayIndex = 14
-$grid.Columns['Folder'].DisplayIndex = 15
+$grid.Columns['GitHub'].DisplayIndex = 10
+$grid.Columns['misc'].DisplayIndex = 11
+$grid.Columns['Release'].DisplayIndex = 12
+$grid.Columns['Exe'].DisplayIndex = 13
+$grid.Columns['Dbg'].DisplayIndex = 14
+$grid.Columns['Spcl'].DisplayIndex = 15
+$grid.Columns['Cmd'].DisplayIndex = 16
+$grid.Columns['Folder'].DisplayIndex = 17
+$grid.Columns['misc'].HeaderCell.ToolTipText = 'Deploy this branch from GitHub to phildogames.com/misc/<repository> over SSH'
 $dirtyHeaderColor = [System.Drawing.ColorTranslator]::FromHtml('#9E9E9E')
 $grid.Columns['Dirty'].HeaderCell.Style.BackColor = $dirtyHeaderColor
 $grid.Columns['Dirty'].HeaderCell.Style.ForeColor = [System.Drawing.Color]::White
@@ -2536,6 +2637,9 @@ $grid.Add_ColumnHeaderMouseClick({
     }
 
     switch ($grid.Columns[$e.ColumnIndex].Name) {
+        'GitHub' {
+            Start-GitHubRefreshForGrid -Grid $grid
+        }
         'Dirty' {
             Start-DirtyStatusRefreshForGrid -Grid $grid
         }
@@ -2581,6 +2685,12 @@ $grid.Add_CellContentClick({
     $directory = $directory.Trim()
 
     switch ($columnName) {
+        'misc' { Start-MiscInDirectory -Directory $directory }
+        'GitHub' {
+            if ($row.Cells['GitHub'].Tag -eq 'Available') {
+                Start-GitHubWork -Grid $grid -Directory $directory -Publish
+            }
+        }
         'AI' {
             $agentCmd = $txtAgent.Text.Trim()
             if ([string]::IsNullOrWhiteSpace($agentCmd)) {
@@ -2649,6 +2759,10 @@ $grid.Add_MessageEnterPressed({
 })
 
 $form.Add_FormClosed({
+    if ($null -ne $script:GitHubTimer) { $script:GitHubTimer.Stop(); $script:GitHubTimer.Dispose() }
+    foreach ($job in $script:GitHubJobs.ToArray()) { $job.Worker.Stop(); $job.Worker.Dispose() }
+    $script:GitHubJobs.Clear()
+    if ($null -ne $script:GitHubPool) { $script:GitHubPool.Dispose() }
     if ($null -ne $script:DirtyStatusPollTimer) {
         $script:DirtyStatusPollTimer.Stop()
         $script:DirtyStatusPollTimer.Dispose()
